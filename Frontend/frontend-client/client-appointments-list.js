@@ -6,79 +6,95 @@
  * Recupera le prenotazioni dell'utente dal server
  */
 function fetchUserBookings(skipPush = false) {
-    window.scrollTo(0, 0);
-    if (!skipPush) pushView('storico');
+  window.scrollTo(0, 0);
+  if (!skipPush) pushView('storico');
 
-    // Se i dati sono in cache, li usiamo per renderizzare subito la pagina,
-    // evitando lo spinner a schermo intero se non è il primo caricamento assoluto.
-    const cachedBookings = cachedAppData && cachedAppData.userBookings;
-    const cachedBookingsArray = Array.isArray(cachedBookings)
-      ? cachedBookings
-      : (cachedBookings && Array.isArray(cachedBookings.data) ? cachedBookings.data : []);
+  // Se i dati sono in cache, li usiamo per renderizzare subito la pagina,
+  // evitando lo spinner a schermo intero se non è il primo caricamento assoluto.
+  const cachedBookings = cachedAppData && cachedAppData.userBookings;
+  const cachedBookingsArray = Array.isArray(cachedBookings)
+    ? cachedBookings
+    : (cachedBookings && Array.isArray(cachedBookings.data) ? cachedBookings.data : []);
 
-    if (cachedBookingsArray.length > 0) {
-        renderStoricoPage(cachedBookingsArray);
-        return;
-    }
+  if (cachedBookingsArray.length > 0) {
+    renderStoricoPage(cachedBookingsArray);
+    return;
+  }
 
-    // Schermata di caricamento temporanea
-    appContainer.innerHTML = `<div class="loading-container"><div class="spinner"></div></div>`;
-    
-    google.script.run
-      .withFailureHandler(err => {
-        console.error("Errore fetchUserBookings:", err);
-        showCustomAlert("Errore", "Impossibile caricare lo storico: " + err);
-        renderHomePage();
-      })
-      .withSuccessHandler(res => {
-        if (res && res.status === "OK") {
-          renderStoricoPage(res.data || []);
-        } else {
-          showCustomAlert("Errore", res.message || "Impossibile caricare lo storico.");
-        }
-      })
-      .getUserBookings(userData.email);
+  // Schermata di caricamento temporanea
+  appContainer.innerHTML = `<div class="loading-container"><div class="spinner"></div></div>`;
+
+  google.script.run
+    .withFailureHandler(err => {
+      console.error("Errore fetchUserBookings:", err);
+      showCustomAlert("Errore", "Impossibile caricare lo storico: " + err);
+      renderHomePage();
+    })
+    .withSuccessHandler(res => {
+      // Gestisci sia il formato diretto (array) da Firestore che il formato { status, data } dal backend GAS
+      if (Array.isArray(res)) {
+        renderStoricoPage(res);
+      } else if (res && res.status === "OK") {
+        renderStoricoPage(res.data || []);
+      } else {
+        showCustomAlert("Errore", (res && res.message) || "Impossibile caricare lo storico.");
+      }
+    })
+    .getUserBookings(userData.email);
 }
 
 /**
  * Rendering della pagina Storico
  */
 function renderStoricoPage(bookings, skipAnimation = false) {
-    let listHtml = '';
-    const now = Date.now();
-    const limit24h = 24 * 60 * 60 * 1000; // 24 ore in millisecondi
-    const normalizedBookings = Array.isArray(bookings)
-      ? bookings
-      : (bookings && Array.isArray(bookings.data) ? bookings.data : []);
+  let listHtml = '';
+  const now = Date.now();
+  const normalizedBookings = Array.isArray(bookings)
+    ? bookings
+    : (bookings && Array.isArray(bookings.data) ? bookings.data : []);
 
-    // Recupera l'impostazione per la visualizzazione del pulsante di cancellazione
-    const isCancelButtonEnabled = cachedAppData && cachedAppData.settings && (cachedAppData.settings.CANCELLATION_BUTTON === true || cachedAppData.settings.CANCELLATION_BUTTON === "TRUE");
+  // Recupera le impostazioni per la cancellazione direttamente da Firestore (cachedAppData.settings)
+  const settings = (cachedAppData && cachedAppData.settings) || {};
+  const isCancelButtonEnabled = settings.CANCELLATION_BUTTON === true ||
+    String(settings.CANCELLATION_BUTTON).toLowerCase() === 'true' ||
+    settings.cancellationButton === true;
 
-    if (normalizedBookings && normalizedBookings.length > 0) {
-      listHtml = normalizedBookings.map((b, index) => {
-        let cancelBtnHtml = '';
-        const rawStatus = (b.stato || '').toString().trim();
-        const statusLower = rawStatus.toLowerCase();
-        const isPending = statusLower === 'richiesta cancellazione';
-        const isWeekly = statusLower === 'weekly' || statusLower === 'w e e k l y' || statusLower === 'weekly ';
-        const isConfirmed = statusLower === 'confermato';
-        const isPast = (b.timestamp || 0) < now;
-        
-        // Verifichiamo se mancano più di 24 ore all'inizio dell'appuntamento
-        const isCancellable = (b.timestamp - now) > limit24h;
-        
-        // Mostra il tasto annulla se abilitato, se l'appuntamento è 'Confermato' o 'Weekly' e se è cancellabile.
-        if (isCancelButtonEnabled && (isConfirmed || isWeekly) && isCancellable) {
-          cancelBtnHtml = `<button class="cancel-booking-btn" id="cancel-request-btn-${b.id}" onclick="handleCancelBooking('${b.id}', this, '${b.calendarId}')">RICHIEDI ANNULLAMENTO</button>`;
-        } else if (isPending) {
-          cancelBtnHtml = `<button class="cancel-booking-btn cancellation-requested" disabled>RICHIESTO ANNULLAMENTO</button>`;
-        }
-        
-        return `
+  const minCancellationHours = parseFloat(settings.MIN_CANCELLATION_HOURS ?? settings.minCancellationHours ?? 24) || 24;
+  const autoCancellationMinutes = parseInt(settings.AUTO_CANCELLATION_MINUTES ?? settings.autoCancellationMinutes ?? 5, 10) || 5;
+  const minCancellationMs = minCancellationHours * 60 * 60 * 1000;
+  const autoCancellationMs = autoCancellationMinutes * 60 * 1000;
+
+  if (normalizedBookings && normalizedBookings.length > 0) {
+    listHtml = normalizedBookings.map((b, index) => {
+      let cancelBtnHtml = '';
+      const rawStatus = (b.stato || '').toString().trim();
+      const statusLower = rawStatus.toLowerCase();
+      const isPending = statusLower === 'richiesta cancellazione';
+      const isWeekly = statusLower === 'weekly' || statusLower === 'w e e k l y' || statusLower === 'weekly ';
+      const isConfirmed = statusLower === 'confermato';
+      const isPast = (b.timestamp || 0) < now;
+
+      // Calcola se rientra nei minuti di cancellazione automatica post-prenotazione
+      const prenotationTime = b.prenotationISO ? new Date(b.prenotationISO).getTime() : 0;
+      const canAutoCancel = prenotationTime > 0 && (now - prenotationTime) <= autoCancellationMs;
+
+      // Verifichiamo se l'appuntamento è cancellabile:
+      // - o siamo entro i minuti di auto-cancellazione dalla prenotazione
+      // - oppure il pulsante cancellazione è abilitato E mancano più delle ore minime dall'inizio
+      const isAllowedToCancel = canAutoCancel || (isCancelButtonEnabled && ((b.timestamp - now) > minCancellationMs));
+
+      // Mostra il tasto annulla se consentito e se l'appuntamento è 'Confermato' o 'Weekly' e non passato
+      if (isAllowedToCancel && (isConfirmed || isWeekly) && !isPast) {
+        cancelBtnHtml = `<button class="cancel-booking-btn" id="cancel-request-btn-${b.id}" onclick="handleCancelBooking('${b.id}', this, '${b.calendarId}')">ANNULLA</button>`;
+      } else if (isPending) {
+        cancelBtnHtml = `<button class="cancel-booking-btn cancellation-requested" disabled>RICHIESTO ANNULLAMENTO</button>`;
+      }
+
+      return `
           <div class="booking-card larger-card ${skipAnimation ? '' : 'fade-in'} ${isPast ? 'past-booking' : ''}" id="booking-card-${b.id}" style="${skipAnimation ? '' : `animation-delay: ${index * 0.05}s; opacity: 0;`}">
             <div class="booking-info">
               <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 5px;">
-                <div style="font-weight: bold; text-transform: capitalize; font-size: 1.1em;">${b.servizio.replace(/_/g, ' ')}</div>
+                <div style="font-weight: bold; text-transform: capitalize; font-size: 1.1em;">${(b.servizio || b.service || '').replace(/_/g, ' ')}</div>
                 ${isWeekly ? `<div style="font-size: 0.75em; color: #3498db; font-weight: 700; text-transform: uppercase; background: rgba(52, 152, 219, 0.1); padding: 4px 8px; border-radius: 8px;">Settimanale</div>` : ''}
               </div>
               <div style="font-size: 1em; color: #666; margin-top: 5px;">${b.data}</div>
@@ -88,12 +104,12 @@ function renderStoricoPage(bookings, skipAnimation = false) {
             ${cancelBtnHtml}
           </div>
         `;
-      }).join('');
-    } else {
-      listHtml = '<p style="text-align: center; color: #999; margin-top: 40px;">Non hai ancora effettuato prenotazioni.</p>';
-    }
-  
-    appContainer.innerHTML = `
+    }).join('');
+  } else {
+    listHtml = '<p style="text-align: center; color: #999; margin-top: 40px;">Non hai ancora effettuato prenotazioni.</p>';
+  }
+
+  appContainer.innerHTML = `
       <div id="storico-screen" class="full-screen">
         <div class="fixed-header">
           <button onclick="renderHomePage()" class="header-back-btn">
@@ -160,26 +176,30 @@ function executeCancellation(eventId, calendarId, reason, buttonElement, showSpi
       if (res && (res.status === "OK" || res.status === "REQUEST_SENT" || res.status === "NEED_REASON")) {
         // La richiesta di cancellazione è andata a buon fine. Aggiorniamo solo il pulsante.
         if (cachedAppData && cachedAppData.userBookings) {
-          const bookingsArray = Array.isArray(cachedAppData.userBookings.data) ? cachedAppData.userBookings.data : [];
+          const bookingsArray = Array.isArray(cachedAppData.userBookings) ? cachedAppData.userBookings : (Array.isArray(cachedAppData.userBookings.data) ? cachedAppData.userBookings.data : []);
           const b = bookingsArray.find(item => item.id === eventId);
-          if (b) { b.stato = 'Richiesta cancellazione'; }
+          if (b) { b.stato = 'Richiesta cancellazione'; b.status = 'Richiesta cancellazione'; }
         }
         // Chiudi il popup e aggiorna la vista corrente senza animazioni
         closeAllPopupsAndRedirect(() => renderStoricoPage(cachedAppData.userBookings, true), true);
       } else if (res && res.status === "DELETED") {
         // L'appuntamento è stato cancellato direttamente (es. entro i primi 5 minuti dalla prenotazione).
         showCustomAlert("Annullato", "Appuntamento annullato con successo.", () => {
-            if (cachedAppData && cachedAppData.userBookings) {
-                cachedAppData.userBookings.data = cachedAppData.userBookings.data.filter(item => item.id !== eventId);
+          if (cachedAppData && cachedAppData.userBookings) {
+            if (Array.isArray(cachedAppData.userBookings)) {
+              cachedAppData.userBookings = cachedAppData.userBookings.filter(item => item.id !== eventId);
+            } else if (Array.isArray(cachedAppData.userBookings.data)) {
+              cachedAppData.userBookings.data = cachedAppData.userBookings.data.filter(item => item.id !== eventId);
             }
-            closeAllPopupsAndRedirect(() => renderStoricoPage(cachedAppData.userBookings, true), true);
-            const cardToRemove = document.getElementById(`booking-card-${eventId}`);
-            if (cardToRemove) {
-                cardToRemove.style.transition = 'opacity 0.3s ease, transform 0.3s ease, max-height 0.3s ease';
-                cardToRemove.style.opacity = '0';
-                cardToRemove.style.transform = 'scale(0.95)';
-                setTimeout(() => cardToRemove.remove(), 300);
-            }
+          }
+          closeAllPopupsAndRedirect(() => renderStoricoPage(cachedAppData.userBookings, true), true);
+          const cardToRemove = document.getElementById(`booking-card-${eventId}`);
+          if (cardToRemove) {
+            cardToRemove.style.transition = 'opacity 0.3s ease, transform 0.3s ease, max-height 0.3s ease';
+            cardToRemove.style.opacity = '0';
+            cardToRemove.style.transform = 'scale(0.95)';
+            setTimeout(() => cardToRemove.remove(), 300);
+          }
         });
       } else if (res && res.status === "TOO_LATE") {
         cachedAppData = null; // Forza il refresh completo dei dati alla prossima navigazione
@@ -216,7 +236,7 @@ function showCancellationReasonPopup(eventId, calendarId, buttonElement) {
     closeAllPopupsAndRedirect(() => renderStoricoPage(cachedAppData.userBookings, true), true);
     resetCancelButton(buttonElement);
   };
-  
+
   document.getElementById('confirmCancelReasonBtn').onclick = () => {
     const confirmBtn = document.getElementById('confirmCancelReasonBtn');
     const errorMsgEl = document.getElementById('reason-error-msg');
@@ -239,12 +259,12 @@ function resetCancelButton(btn, isPending = false) {
   if (btn) {
     hideButtonSpinner(btn); // Prima di tutto, nascondi lo spinner se presente
     if (isPending) {
-        btn.innerText = "RICHIESTO ANNULLAMENTO";
-        btn.classList.add('cancellation-requested');
-        btn.disabled = true;
+      btn.innerText = "RICHIESTO ANNULLAMENTO";
+      btn.classList.add('cancellation-requested');
+      btn.disabled = true;
     } else {
-        btn.innerText = "RICHIEDI ANNULLAMENTO";
-        btn.disabled = false;
+      btn.innerText = "ANNULLA";
+      btn.disabled = false;
     }
   }
 }

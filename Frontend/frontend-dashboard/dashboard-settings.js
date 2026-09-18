@@ -34,8 +34,8 @@ window.createBarberBlockHtml = function(id, b) {
                     <input type="tel" class="barber-inp" data-id="${id}" data-f="telefono" value="${b.telefono || ''}" placeholder="Numero di telefono">
                 </div>
                 <div style="text-align: left;">
-                    <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">URL Immagine Profilo</label>
-                    <input type="text" class="barber-inp" data-id="${id}" data-f="foto" value="${b.foto || ''}" placeholder="Link alla foto">
+                    <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Foto Profilo (cartella Photo)</label>
+                    <input type="text" class="barber-inp" data-id="${id}" data-f="foto" value="${b.foto || ''}" placeholder="Es. Sergio.jpg (o lascia vuoto)">
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Password Dashboard</label>
@@ -154,13 +154,8 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                             </div>
 
                             <div style="text-align: left; width: 100%;">
-                                <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Disponibilità appuntamenti da:</label>
-                                <select id="set-MIN_BOOKINGS_DAYS" style="width: 100%; height: 45px; border-radius: 25px; border: 1px solid #ccc; background: #fff; padding: 0 15px;">
-                                    <option value="0" ${settings.MIN_BOOKINGS_DAYS == 0 ? 'selected' : ''}>Oggi</option>
-                                    <option value="1" ${settings.MIN_BOOKINGS_DAYS == 1 ? 'selected' : ''}>Domani</option>
-                                    <option value="2" ${settings.MIN_BOOKINGS_DAYS == 2 ? 'selected' : ''}>Dopodomani</option>
-                                    <option value="next_week" ${settings.MIN_BOOKINGS_DAYS === 'next_week' ? 'selected' : ''}>Prossima settimana (Lunedì)</option>
-                                </select>
+                                <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Disponibilità appuntamenti da (n. giorni a partire da oggi, es. 0 = Oggi, 1 = Domani):</label>
+                                <input type="number" id="set-MIN_BOOKINGS_DAYS" min="0" value="${settings.MIN_BOOKINGS_DAYS !== undefined ? settings.MIN_BOOKINGS_DAYS : 0}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div>
 
                             <div style="text-align: left; width: 100%;">

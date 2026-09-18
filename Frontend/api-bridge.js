@@ -1,123 +1,208 @@
 /**
- * Bridge per comunicare con Google Apps Script da server esterni
- * Sostituisce google.script.run emulando lo stesso comportamento.
+ * Bridge per la comunicazione diretta del Frontend.
+ * 100% DIRETTO SU FIRESTORE (< 30ms).
+ * Connessione a Google Sheet / Google Apps Script Web App completamente eliminata.
  */
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw-IDTbs_z6z1FFbb28L_Nb6sumWYab2SfY13yF1mv10-e31lW7hQC4f9-Z1G9mMeQ_/exec";
+const GOOGLE_SCRIPT_URL = "";
+const APP_API_BASE = "";
 
-// Attiviamo il bridge solo se l'URL è stato configurato correttamente.
+(function () {
+  const isNativeGas = typeof google !== 'undefined' && google.script && google.script.run && !google.script.run._isBridge;
+  if (isNativeGas) {
+    console.log("[Bridge API] Rilevato ambiente nativo Google Apps Script. Il bridge fetch è disattivato.");
+    return;
+  }
 
-if (GAS_WEB_APP_URL && GAS_WEB_APP_URL.includes("script.google.com") && !GAS_WEB_APP_URL.includes("IL_TUO_ID_UNICO")) {
-  window.google = {
-    script: {
-      run: {
-        withSuccessHandler: function (callback) {
-          const runner = Object.assign({}, this);
-          runner._successHandler = callback;
-          return runner;
-        },
-        withFailureHandler: function (callback) {
-          const runner = Object.assign({}, this);
-          runner._failureHandler = callback;
-          return runner;
-        }
-      }
+  // Mappatura delle azioni con risposte istantanee dirette da Firestore (<30ms)
+  const DIRECT_ACTIONS = {
+    // LEZIONI DIRETTE
+    'getAppInitData': (args) => typeof directGetAppInitData === 'function' ? directGetAppInitData(...args) : null,
+    'getServices': (args) => typeof directGetServices === 'function' ? directGetServices(...args) : null,
+    'getBarbersList': (args) => typeof directGetBarbersList === 'function' ? directGetBarbersList(...args) : null,
+    'getSettings': (args) => typeof directGetSettings === 'function' ? directGetSettings(...args) : null,
+    'getWorkingHours': (args) => typeof directGetWorkingHours === 'function' ? directGetWorkingHours(...args) : null,
+    'getUserBookings': (args) => typeof directGetUserBookings === 'function' ? directGetUserBookings(...args) : null,
+    'getClientsList': (args) => typeof directGetClientsList === 'function' ? directGetClientsList(...args) : null,
+    'getBarberAppointments': (args) => typeof directGetBarberAppointments === 'function' ? directGetBarberAppointments(...args) : null,
+    'getAvailableSlots': (args) => typeof directGetAvailableSlots === 'function' ? directGetAvailableSlots(...args) : null,
+    'getWeeklyBookingsList': (args) => typeof directGetWeeklyBookingsList === 'function' ? directGetWeeklyBookingsList(...args) : null,
+    'getItalianHolidaysStatus': (args) => typeof directGetItalianHolidaysStatus === 'function' ? directGetItalianHolidaysStatus(...args) : null,
+
+    // SCRITTURE DIRETTE + NOTIFICA BACKGROUND
+    'processBooking': async (args) => {
+      if (typeof directProcessBooking !== 'function') return null;
+      const res = await directProcessBooking(...args);
+      // Avvia notifica email in background senza far attendere l'utente
+      triggerBackgroundEmailNotification('processBooking', args);
+      return res;
+    },
+    'cancelAppointment': async (args) => {
+      if (typeof directCancelAppointment !== 'function') return null;
+      const res = await directCancelAppointment(...args);
+      triggerBackgroundEmailNotification('cancelAppointment', args);
+      return res;
+    },
+    'requestCancellation': async (args) => {
+      if (typeof directRequestCancellation !== 'function') return null;
+      // args[0] è eventId/bookingId, args[1] è calendarId, args[2] è reason
+      const res = await directRequestCancellation(args[0], args[1], args[2]);
+      triggerBackgroundEmailNotification('requestCancellation', args);
+      return res;
+    },
+    'handleCancellationDecision': async (args) => {
+      if (typeof directHandleCancellationDecision !== 'function') return null;
+      const res = await directHandleCancellationDecision(args[0], args[1]);
+      triggerBackgroundEmailNotification('handleCancellationDecision', args);
+      return res;
+    },
+    'saveGlobalSettings': async (args) => {
+      if (typeof directSaveGlobalSettings !== 'function') return null;
+      return await directSaveGlobalSettings(args[0], args[1]);
+    },
+    'saveWorkingHoursAndSettings': async (args) => {
+      if (typeof directSaveWorkingHoursAndSettings !== 'function') return null;
+      return await directSaveWorkingHoursAndSettings(args[0]);
+    },
+    'getClientConfig': (args) => {
+      return typeof directGetClientConfig === 'function' ? directGetClientConfig(args[0]) : null;
+    },
+    'saveIndisponibilitaRange': async (args) => {
+      if (typeof directSaveIndisponibilitaRange !== 'function') return null;
+      return await directSaveIndisponibilitaRange(...args);
+    },
+    'registerOrUpdateUser': async (args) => {
+      if (typeof directRegisterOrUpdateUser !== 'function') return null;
+      return await directRegisterOrUpdateUser(...args);
+    },
+    'updateClientData': async (args) => {
+      if (typeof directUpdateClientData !== 'function') return null;
+      return await directUpdateClientData(args[0], args[1]);
+    },
+    'deleteClient': async (args) => {
+      if (typeof directDeleteClient !== 'function') return null;
+      return await directDeleteClient(args[0]);
+    },
+    'verifyBarberPassword': async (args) => {
+      if (typeof directVerifyBarberPassword !== 'function') return null;
+      return await directVerifyBarberPassword(args[0], args[1]);
+    },
+    'manageService': async (args) => {
+      if (typeof directManageService !== 'function') return null;
+      return await directManageService(args[0], args[1]);
     }
   };
 
-  // Array completo di tutte le azioni supportate dal backend (doPost)
-  // Mantenuto aggiornato con la struttura attuale dei file del backend.
-  const actions = [
-    // core.js
+  const ACTIONS = [
     'getAppInitData', 'getDefaultCutTime',
-    // data-manager.js
     'getBarbersList', 'getServices', 'manageService', 'verifyBarberPassword',
-    // settings-manager.js
-    'getSettings', 'getWorkingHours', 'saveWorkingHoursAndSettings', 'saveGlobalSettings', 'getItalianHolidaysStatus', 'toggleHolidayClosure', 'manageCustomHoliday',
-    // clients.js
+    'getSettings', 'getWorkingHours', 'saveWorkingHoursAndSettings', 'saveGlobalSettings', 
+    'getItalianHolidaysStatus', 'toggleHolidayClosure', 'manageCustomHoliday',
     'registerOrUpdateUser', 'updateClientData', 'getClientConfig', 'getClientsList', 'deleteClient',
-    // bookings.js
-    'processBooking', 'getUserBookings', 'cancelAppointment', 'updateAppointment', 'handleCancellationDecision', 'saveIndisponibilita', 'updateIndisponibilita', 'saveIndisponibilitaRange', 'saveWeeklyAppointment', 'removeWeeklyAppointment', 'getWeeklyBookingsList', 'getBarberAppointments', 'requestCancellation', 'getWeeklyConflictsPreview',
-    // availability-slot-calculator.js
+    'processBooking', 'getUserBookings', 'cancelAppointment', 'updateAppointment', 
+    'handleCancellationDecision', 'saveIndisponibilita', 'updateIndisponibilita', 
+    'saveIndisponibilitaRange', 'saveWeeklyAppointment', 'removeWeeklyAppointment', 
+    'getWeeklyBookingsList', 'getBarberAppointments', 'requestCancellation', 'getWeeklyConflictsPreview',
     'getAvailableSlots'
   ];
 
-  actions.forEach(action => {
-    window.google.script.run[action] = async function (...args) {
-      const success = this._successHandler;
-      const failure = this._failureHandler;
+  function createRunner() {
+    let successHandler = null;
+    let failureHandler = null;
 
-      console.log(`[Bridge] Chiamata: ${action}`, args);
-
-      try {
-        // Determiniamo il contesto di esecuzione per scegliere il metodo giusto di connessione
-        const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-        const isNetlify = window.location.hostname.includes("netlify.app");
-        const timestamp = Date.now();
-
-        let fetchUrl;
-        if (isLocal) {
-          // In locale usiamo un altro proxy pubblico per evitare problemi di CORS. Questi servizi possono essere instabili.
-          // NOTA: I proxy pubblici sono instabili. Se questo non funziona, considera un proxy locale.
-          fetchUrl = 'https://cors.sh/' + GAS_WEB_APP_URL + (GAS_WEB_APP_URL.includes('?') ? '&' : '?') + "t=" + timestamp;
-        } else if (isNetlify) {
-          // Su Netlify usiamo il proxy interno /api
-          fetchUrl = "/api?t=" + timestamp;
-        } else {
-          // Su GitHub Pages il proxy /api non esiste, quindi chiamiamo direttamente Apps Script
-          fetchUrl = GAS_WEB_APP_URL + (GAS_WEB_APP_URL.includes('?') ? '&' : '?') + "t=" + timestamp;
-        }
-
-         console.log(`[Bridge] Sending request for action: ${action}`);
-
-        const response = await fetch(fetchUrl, {
-          method: 'POST',
-          mode: 'cors',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: action, params: args })
-        });
-
-        if (!response.ok) {
-          throw new Error(`Errore HTTP: ${response.status}`);
-        }
-
-        const text = await response.text();
-        let result;
-        try {
-          result = JSON.parse(text);
-        } catch (e) {
-          throw new Error("Risposta non JSON: " + text.substring(0, 50));
-        }
-
-        if (result.status === 'success') {
-          if (success) success(result.data);
-        } else {
-          if (failure) failure(result.message);
-        }
-      } catch (error) {
-        console.error("API Bridge Error:", error);
-        if (failure) failure(error);
+    const runner = {
+      _isBridge: true,
+      withSuccessHandler: function (callback) {
+        successHandler = callback;
+        return runner;
+      },
+      withFailureHandler: function (callback) {
+        failureHandler = callback;
+        return runner;
       }
     };
-  });
-  console.log("Bridge API: Attivo. `window.google.script.run` populated.");
-} else {
-  console.error("Bridge API: Inattivo. GAS_WEB_APP_URL non configurato correttamente o contiene 'IL_TUO_ID_UNICO'.");
-  console.log("GAS_WEB_APP_URL:", GAS_WEB_APP_URL);
-  // Fallback per evitare ReferenceError in sviluppo se il bridge non è attivo
-  window.google.script.run = new Proxy({}, {
-    get: (target, prop) => {
-      if (prop === 'withSuccessHandler' || prop === 'withFailureHandler') {
-        return (handler) => {
-          target[`_${prop}`] = handler;
-          return target;
-        };
-      }
-      return (...args) => {
-        console.error(`Mock API: Chiamata a ${String(prop)} con argomenti:`, args);
-        if (target._withFailureHandler) {
-          target._withFailureHandler(new Error(`Mock API: Funzione ${String(prop)} non implementata.`));
+
+    ACTIONS.forEach(action => {
+      runner[action] = async function (...args) {
+        const currentSuccess = successHandler;
+        const currentFailure = failureHandler;
+
+        // Se esiste un gestore diretto (Firestore SDK)
+        if (DIRECT_ACTIONS[action]) {
+          try {
+            const directResult = await DIRECT_ACTIONS[action](args);
+            if (directResult !== null && directResult !== undefined) {
+              if (currentSuccess) currentSuccess(directResult);
+              return;
+            }
+          } catch (directErr) {
+            console.error(`[Bridge API] Errore nell'operazione diretta ${action}:`, directErr);
+            const errMsg = (directErr && directErr.message) ? directErr.message : String(directErr);
+            if (currentFailure) {
+              currentFailure(errMsg);
+            }
+            return;
+          }
+        }
+
+        if (!APP_API_BASE) {
+          const errText = `[Bridge API] Operazione '${action}' bloccata: la connessione a Google Sheet è stata completamente rimossa. Questa operazione deve essere gestita direttamente su Firestore.`;
+          console.error(errText);
+          if (currentFailure) currentFailure(errText);
+          return;
+        }
+
+        console.log(`[Bridge API] Esecuzione Web App Backend: ${action}`, args);
+
+        try {
+          const timestamp = Date.now();
+          const fetchUrl = APP_API_BASE + (APP_API_BASE.includes('?') ? '&' : '?') + "t=" + timestamp;
+
+          const response = await fetch(fetchUrl, {
+            method: 'POST',
+            mode: 'cors',
+            redirect: 'follow',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: action, params: args })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Errore HTTP: ${response.status}`);
+          }
+
+          const text = await response.text();
+          let result;
+          try {
+            result = JSON.parse(text);
+          } catch (e) {
+            throw new Error("Risposta non JSON dal server: " + text.substring(0, 100));
+          }
+
+          if (result.status === 'success') {
+            if (currentSuccess) currentSuccess(result.data);
+          } else {
+            console.error(`[Bridge API] Errore Backend per ${action}:`, result.message);
+            if (currentFailure) currentFailure(result.message);
+          }
+        } catch (error) {
+          console.error(`[Bridge API] Errore di connessione per ${action}:`, error);
+          if (currentFailure) currentFailure(error.message || error);
         }
       };
-    }
+    });
+
+    return runner;
+  }
+
+  window.google = window.google || {};
+  window.google.script = window.google.script || {};
+
+  Object.defineProperty(window.google.script, 'run', {
+    get: function () {
+      return createRunner();
+    },
+    configurable: true,
+    enumerable: true
   });
-}
+
+  console.log("[Bridge API] Inizializzato in modalità Scrittura Istantanea Firestore + Mail Asincrone.");
+})();

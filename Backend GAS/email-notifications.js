@@ -158,55 +158,36 @@ function sendReminderEmail(settings, clientEmail, clientName, bookingStart, serv
  */
 function checkAndSendReminders() {
   const settings = getSettings();
-  if (!_isEmailEnabled(settings)) {
-    console.log("Invio promemoria disabilitato dalle impostazioni globali.");
+  if (!_isEmailEnabled(settings) || !firestoreIsConfigured()) {
+    console.log('Invio promemoria disabilitato: Firestore o email non configurati.');
     return;
   }
 
-  const sheet = getSs().getSheetByName('Bookings');
-  const data = sheet.getDataRange().getValues();
+  const bookings = firestoreListCollection('bookings') || [];
+  const clients = firestoreListCollection('clients') || [];
+  const clientsMap = new Map((clients || []).map((doc) => [(doc.id || doc.clientId || ''), doc]));
+  const barbers = getBarbersList();
   const now = new Date();
   const reminderHours = parseInt(settings.REMINDER_NOTIFICATION_TIME, 10) || 24;
-  const triggerIntervalHours = 6; // L'intervallo del tuo trigger
+  const triggerIntervalHours = 6;
 
-  const barbers = getBarbersList();
-  const clientsSheet = getSs().getSheetByName('Clients');
-  const clientsData = clientsSheet.getDataRange().getValues();
-  const clientsMap = new Map(clientsData.slice(1).map(r => [r[COL_CLIENT.ID], r]));
+  bookings.forEach((booking) => {
+    const status = (booking.status || '').toString().trim().toLowerCase();
+    const reminderSent = !!booking.reminderSent;
+    const start = new Date(booking.startISO || booking.start || 0);
 
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const status = (row[COL_BOOKING.STATUS] || "").toLowerCase();
-    const reminderSent = row[COL_BOOKING.REMINDER_SENT];
-    const start = new Date(row[COL_BOOKING.ISO_START]);
-
-    // Controlla solo appuntamenti confermati o settimanali, futuri e per cui non è stato inviato un promemoria
     if ((status === 'confermato' || status === 'weekly' || status === 'richiesta cancellazione') && !reminderSent && start > now) {
       const hoursUntil = (start.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-      // Invia se l'appuntamento è nella finestra temporale corretta
-      // (es. tra 24 e 18 ore prima, se il trigger è ogni 6 ore)
       if (hoursUntil <= reminderHours && hoursUntil > (reminderHours - triggerIntervalHours)) {
-        const clientId = row[COL_BOOKING.CLIENT_ID];
-        const clientInfo = clientsMap.get(clientId);
-        const barberInfo = barbers[row[COL_BOOKING.BARBER_ID]];
-
-        if (clientInfo && barberInfo && isValidClientEmail(clientInfo[COL_CLIENT.EMAIL])) {
-          console.log(`Invio promemoria per appuntamento ${row[COL_BOOKING.ID]} a ${clientInfo[COL_CLIENT.EMAIL]}`);
-          sendReminderEmail(
-            settings,
-            clientInfo[COL_CLIENT.EMAIL],
-            row[COL_BOOKING.CLIENT_NAME],
-            start,
-            row[COL_BOOKING.SERVICE],
-            barberInfo.nome
-          );
-          // Segna il promemoria come inviato nel foglio di calcolo
-          sheet.getRange(i + 1, COL_BOOKING.REMINDER_SENT + 1).setValue(new Date().toISOString());
+        const client = clientsMap.get(booking.clientId || '');
+        const barber = barbers[booking.barberId];
+        if (client && barber && isValidClientEmail(client.email || '')) {
+          sendReminderEmail(settings, client.email || '', booking.clientName || '', start, booking.service || '', barber.nome || '');
+          firestoreUpsert('bookings', booking.id || '', { ...booking, reminderSent: true });
         }
       }
     }
-  }
+  });
 }
 
 /**

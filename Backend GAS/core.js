@@ -3,16 +3,10 @@
  * File Core: Gestione API e caricamento dati base.
  */
 
-// Sostituisci con l'ID reale del tuo foglio per evitare errori in modalità Web App
-const SPREADSHEET_ID = "1sZ-2g0KM9wNKmA23i9CipwA526F2wxPSMwmOdCihd20";
-// Cache dell'oggetto Spreadsheet per evitare chiamate multiple a openById
-var _SS_INSTANCE = null;
-function getSs() {
-  if (!_SS_INSTANCE) _SS_INSTANCE = SpreadsheetApp.openById(SPREADSHEET_ID);
-  return _SS_INSTANCE;
-}
-
-// Cache globale per ridurre le letture del foglio durante una singola esecuzione
+// Il sistema è stato migrato a Firestore come storage primario.
+// Non esiste più una connessione implicita a Google Sheets in questo backend.
+// La configurazione reale va impostata nelle Properties del progetto Apps Script,
+// oppure tramite le variabili di ambiente / config del backend di produzione.
 var _GLOBAL_CACHE = { settings: null, barbers: null, services: null };
 
 /**

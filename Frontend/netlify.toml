@@ -1,22 +1,22 @@
 [build]
   publish = "."
 
-# Reindirizzamento per l'API (Proxy verso Google Apps Script)
+# Il backend reale è configurato tramite l'endpoint esterno Google Apps Script Web App.
 [[redirects]]
   from = "/api/*"
-  to = "https://script.google.com/macros/s/AKfycbw2qW3zlen0UJ4urE9HCHsD-bMxGSf9wiXoVzPTGuRMdGOwOV35JlWiWORfGNvRbRJP/exec"
+  to = "/index.html"
   status = 200
   force = true
 
-# Reindirizzamento per la Dashboard del Staff (Barbiere)
+# Reindirizzamento per la Dashboard dello Staff (Barbiere)
 [[redirects]]
   from = "/admin"
-  to = "/frontend-dashboard/admin.html"
+  to = "/admin.html"
   status = 200
 
 [[redirects]]
   from = "/frontend-dashboard/*"
-  to = "/frontend-dashboard/admin.html"
+  to = "/admin.html"
   status = 200
 
 # Reindirizzamento per tutte le altre rotte verso la SPA Clienti

@@ -1,4 +1,27 @@
 /**
+ * Recupera tutti gli appuntamenti dal database Firestore per la logica di disponibilità.
+ */
+function getAvailabilityBookingsFromFirestore() {
+  if (!firestoreIsConfigured()) return [];
+
+  const docs = firestoreListCollection('bookings') || [];
+  return docs.map((doc) => {
+    const status = (doc.status || '').toString().trim().toLowerCase();
+    const startISO = doc.startISO || doc.startIso || doc.start || '';
+    const start = startISO ? new Date(startISO) : null;
+    const duration = parseInt(doc.duration || 0, 10) || 0;
+    return {
+      id: doc.id || '',
+      status,
+      barberId: (doc.barberId || '').toString(),
+      start,
+      startISO,
+      duration
+    };
+  });
+}
+
+/**
  * Verifica se un dato slot temporale è disponibile per un barbiere.
  * @param {string} slotIso - L'orario di inizio in formato ISO.
  * @param {number} duration - La durata in minuti.
@@ -6,22 +29,25 @@
  * @returns {boolean} True se lo slot è libero, altrimenti false.
  */
 function checkSlotAvailability(slotIso, duration, barberId) {
+  if (!firestoreIsConfigured()) return true;
+
   const start = new Date(slotIso);
   const end = new Date(start.getTime() + duration * 60000);
 
-  const sheet = getSs().getSheetByName('Bookings');
-  const data = sheet.getDataRange().getValues();
+  const bookings = getAvailabilityBookingsFromFirestore();
+  for (const booking of bookings) {
+    if (!booking.start || booking.barberId.toString() !== barberId.toString()) continue;
 
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const bStatus = (row[COL_BOOKING.STATUS] || "").toLowerCase();
-    if (row[COL_BOOKING.BARBER_ID] == barberId && ['confermato', 'richiesta cancellazione', 'weekly', 'indisponibile'].includes(bStatus)) {
-      const bStart = parseItalianDateString(row[COL_BOOKING.ISO_START]);
-      const bEnd = new Date(bStart.getTime() + (parseInt(row[COL_BOOKING.DURATION], 10) || 0) * 60000);
-      if (start < bEnd && end > bStart) return false; // Conflitto trovato
-    }
+    const bookingStatus = booking.status;
+    const activeStatuses = ['confermato', 'richiesta cancellazione', 'weekly', 'indisponibile'];
+    if (!activeStatuses.includes(bookingStatus)) continue;
+
+    const bStart = new Date(booking.startISO || booking.start);
+    const bEnd = new Date(bStart.getTime() + (booking.duration || 0) * 60000);
+    if (start < bEnd && end > bStart) return false;
   }
-  return true; // Nessun conflitto
+
+  return true;
 }
 
 /**
@@ -53,18 +79,10 @@ function getAvailableSlots(serviceDuration, serviceName, clientEmail, customWind
   const settings = getSettings();
   const bookingWindow = parseInt(customWindow || settings.BOOKING_WINDOW_DAYS, 10) || 10;
   
-  // Gestione del giorno di inizio prenotazioni (es. da oggi, da domani, dalla prossima settimana)
+  // Gestione del giorno di inizio prenotazioni (es. 0 da oggi, 1 da domani)
   let minBookingDays = parseInt(settings.MIN_BOOKINGS_DAYS, 10);
-  if (isNaN(minBookingDays)) {
-    if (settings.MIN_BOOKINGS_DAYS === 'next_week') {
-      const today = new Date();
-      const dayOfWeek = today.getDay(); // 0 for Sunday, 1 for Monday
-      let daysUntilMonday = (dayOfWeek === 0) ? 1 : (7 - dayOfWeek + 1) % 7;
-      if (daysUntilMonday === 0) daysUntilMonday = 7; // If today is Monday, next Monday is 7 days away
-      minBookingDays = daysUntilMonday;
-    } else {
-      minBookingDays = 0; // Default a oggi se valore sconosciuto
-    }
+  if (isNaN(minBookingDays) || minBookingDays < 0) {
+    minBookingDays = 0;
   }
 
   // Calcolo della durata effettiva del servizio in base al profilo del cliente
@@ -94,30 +112,25 @@ function getAvailableSlots(serviceDuration, serviceName, clientEmail, customWind
   // Viene applicata solo se la richiesta proviene dall'app del cliente (context === 'client').
   const maxFutureBookings = parseInt(settings.MAX_FUTURE_BOOKINGS, 10);
 
-  if (context === 'client' && clientEmail && maxFutureBookings > 0) {
-    const clientSheet = getSs().getSheetByName('Clients');
-    const clientsData = clientSheet.getDataRange().getValues();
-    const clientRow = clientsData.find(row => row[COL_CLIENT.EMAIL] && row[COL_CLIENT.EMAIL].toString().toLowerCase() === clientEmail.toLowerCase());
-    const clientId = clientRow ? clientRow[COL_CLIENT.ID] : null;
+  if (context === 'client' && clientEmail && maxFutureBookings > 0 && firestoreIsConfigured()) {
+    const clients = firestoreListCollection('clients') || [];
+    const clientDoc = clients.find(doc => ((doc.email || '').toString().toLowerCase() === clientEmail.toLowerCase()));
+    const clientId = clientDoc ? (clientDoc.id || clientDoc.clientId || '') : null;
 
     if (clientId) {
       let futureBookingsCount = 0;
-      const bookingsData = getSs().getSheetByName('Bookings').getDataRange().getValues();
-      for (let i = 1; i < bookingsData.length; i++) {
-        const row = bookingsData[i];
-        const status = (row[COL_BOOKING.STATUS] || "").toLowerCase();
-        const bookingClientId = row[COL_BOOKING.CLIENT_ID];
-        const bookingStart = parseItalianDateString(row[COL_BOOKING.ISO_START]);
-        
-        // Contiamo solo gli appuntamenti standard futuri del cliente (non 'weekly' o 'cancellato')
-        if (bookingClientId === clientId && bookingStart > now && (status === 'confermato' || status === 'richiesta cancellazione')) {
+      const bookings = getAvailabilityBookingsFromFirestore();
+      for (const booking of bookings) {
+        const bookingStatus = booking.status;
+        const bookingClientId = (booking.clientId || '').toString();
+        const bookingStart = booking.start;
+        if (bookingClientId === clientId && bookingStart && bookingStart > now && (bookingStatus === 'confermato' || bookingStatus === 'richiesta cancellazione')) {
           futureBookingsCount++;
         }
       }
 
-      // Se il cliente ha raggiunto il limite, non mostriamo alcun slot disponibile.
       if (futureBookingsCount >= maxFutureBookings) {
-        return []; // Restituisce un array vuoto, bloccando la visualizzazione di qualsiasi slot.
+        return [];
       }
     }
   }
@@ -132,43 +145,56 @@ function getAvailableSlots(serviceDuration, serviceName, clientEmail, customWind
     if (firstBarber) timeZone = getCalendarTimeZone(firstBarber.calendarId);
   }
 
-  const hoursData = getWorkingHours(); // Usa gli orari strutturati
+  const hoursData = getWorkingHours();
 
-  const sheetBookings = getSs().getSheetByName('Bookings');
-  const rawBookings = sheetBookings.getDataRange().getValues();
-  
-  // Liste per impegni reali (da bloccare) ed esclusioni (per regole Weekly)
+  const bookings = getAvailabilityBookingsFromFirestore();
+
   const sheetEventsList = [];
   const exclusions = new Set();
 
-  for (let i = 1; i < rawBookings.length; i++) {
-    const row = rawBookings[i];
-    const bStatus = (row[COL_BOOKING.STATUS] || "").toString().trim().toLowerCase();
-    const bIso = row[COL_BOOKING.ISO_START];
-    const bBarberId = (row[COL_BOOKING.BARBER_ID] || "").toString().trim();
+  for (const booking of bookings) {
+    const bStatus = booking.status;
+    const bIso = booking.startISO;
+    const bBarberId = (booking.barberId || '').toString().trim();
 
     if (bIso && bBarberId) {
-      const isoKey = (bIso instanceof Date) ? bIso.toISOString() : bIso.toString();
-      
-      const bId = (row[COL_BOOKING.ID] || "").toString();
-      // Solo gli appuntamenti attivi o le eccezioni manuali (BK_EXC_) bloccano la regola Weekly
-      if (bStatus !== 'cancellato' || bId.startsWith("BK_EXC_")) {
-        exclusions.add(bBarberId + "_" + isoKey);
+      const isoKey = booking.start ? booking.start.toISOString() : bIso.toString();
+      const bId = (booking.id || '').toString();
+
+      if (bStatus !== 'cancellato' || bId.startsWith('BK_EXC_')) {
+        exclusions.add(bBarberId + '_' + isoKey);
       }
 
-      // Se lo stato è attivo, aggiungiamo agli impegni per il calcolo degli slot occupati
       if (bStatus === 'confermato' || bStatus === 'richiesta cancellazione' || bStatus === 'weekly' || bStatus === 'indisponibile') {
-        sheetEventsList.push({ // Qui new Date() è corretto perché bIso è già un ISO string
-          start: parseItalianDateString(isoKey).getTime(),
-          end: parseItalianDateString(isoKey).getTime() + (parseInt(row[COL_BOOKING.DURATION], 10) || 0) * 60000,
+        const startMs = booking.start ? booking.start.getTime() : new Date(bIso).getTime();
+        sheetEventsList.push({
+          start: startMs,
+          end: startMs + (booking.duration || 0) * 60000,
           barberId: bBarberId
         });
       }
     }
   }
 
-  // Auto-conferma richieste di cancellazione scadute prima di calcolare la disponibilità
-  syncExpiredCancellationRequests(sheetBookings, rawBookings, now.getTime());
+  if (firestoreIsConfigured()) {
+    const firestoreBookings = firestoreListCollection('bookings') || [];
+    const bookedSet = new Set();
+    firestoreBookings.forEach((doc) => {
+      const status = (doc.status || '').toString().trim().toLowerCase();
+      const startISO = doc.startISO || doc.startIso || doc.start || '';
+      const barberId = (doc.barberId || '').toString().trim();
+      if (barberId && startISO && status === 'richiesta cancellazione') {
+        const parsed = new Date(startISO);
+        if (!isNaN(parsed.getTime()) && parsed.getTime() < now.getTime()) {
+          bookedSet.add(`${barberId}_${startISO}`);
+        }
+      }
+    });
+
+    bookedSet.forEach((key) => {
+      exclusions.add(key);
+    });
+  }
 
   const daysOfWeekNames = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
 

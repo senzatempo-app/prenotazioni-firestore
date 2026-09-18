@@ -10,16 +10,16 @@
  */
 function getSettings() {
   if (_GLOBAL_CACHE.settings) return _GLOBAL_CACHE.settings;
-  const sheet = getSs().getSheetByName('Settings');
-  const data = sheet.getDataRange().getValues();
-  const settings = {};
-  for (let i = 1; i < data.length; i++) {
-    const value = data[i][1];
-    const key = data[i][2];
-    if (key) settings[key] = value;
+
+  if (!firestoreIsConfigured()) {
+    _GLOBAL_CACHE.settings = {};
+    return {};
   }
-  _GLOBAL_CACHE.settings = settings;
-  return settings;
+
+  const firestoreDocs = firestoreListCollection('settings');
+  const mapped = firestoreAsLegacySettings(firestoreDocs || []);
+  _GLOBAL_CACHE.settings = mapped;
+  return mapped;
 }
 
 /**
@@ -27,17 +27,16 @@ function getSettings() {
  * SPOSTATO DA CORE.JS
  */
 function getWorkingHours() {
-  const data = getSs().getSheetByName('Working_Hours').getDataRange().getValues();
-  const hoursObj = {};
-  for (let i = 1; i < data.length; i++) {
-    const bId = data[i][COL_WORKING_HOURS.BARBER_ID];
-    if (bId) {
-      if (!hoursObj[bId]) hoursObj[bId] = [];
-      hoursObj[bId].push(data[i]);
-    }
+  if (!firestoreIsConfigured()) {
+    return {};
   }
-  hoursObj._visibility = [data[1][COL_WORKING_HOURS.VISIBILITY_ALL], data[2][COL_WORKING_HOURS.VISIBILITY_NEXT], data[3][COL_WORKING_HOURS.VISIBILITY_PREVIEW]];
-  return hoursObj;
+
+  const firestoreDocs = firestoreListCollection('workingHours');
+  if (firestoreDocs && firestoreDocs.length) {
+    return firestoreAsLegacyWorkingHours(firestoreDocs);
+  }
+
+  return {};
 }
 
 /**
@@ -45,46 +44,43 @@ function getWorkingHours() {
  * SPOSTATO DA CORE.JS
  */
 function saveWorkingHoursAndSettings(data) {
-  const ss = getSs();
-  const barberId = data.targetBarberId;
-  const sheetHours = ss.getSheetByName('Working_Hours');
-  sheetHours.getDataRange().breakApart();
-
-  for (let col = COL_WORKING_HOURS.OPEN_AM + 1; col <= COL_WORKING_HOURS.CLOSE_PM + 1; col++) {
-    sheetHours.getRange(2, col, sheetHours.getMaxRows() - 1, 1).setNumberFormat('@');
+  if (!firestoreIsConfigured()) {
+    return { status: 'ERROR', message: 'Firestore non configurato. Inserisci le proprietà del progetto.' };
   }
 
-  const currentHoursRange = sheetHours.getDataRange();
-  const currentHoursValues = currentHoursRange.getValues();
+  const barberId = data.targetBarberId;
+  const workingHours = Array.isArray(data.workingHours) ? data.workingHours : [];
+  const existing = firestoreListCollection('workingHours') || [];
+  const sameBarber = existing.filter((doc) => (doc.barberId || doc.id || '') === barberId);
 
-  data.workingHours.forEach(h => {
-    const rowIndex = currentHoursValues.findIndex(row => row[COL_WORKING_HOURS.BARBER_ID] === barberId && row[COL_WORKING_HOURS.DAY] && row[COL_WORKING_HOURS.DAY].toLowerCase() === h.day.toLowerCase());
-    if (rowIndex !== -1) {
-      currentHoursValues[rowIndex][COL_WORKING_HOURS.OPEN_AM] = h.openAM;
-      currentHoursValues[rowIndex][COL_WORKING_HOURS.CLOSE_AM] = h.closeAM;
-      currentHoursValues[rowIndex][COL_WORKING_HOURS.OPEN_PM] = h.openPM;
-      currentHoursValues[rowIndex][COL_WORKING_HOURS.CLOSE_PM] = h.closePM;
-    } else {
-      sheetHours.appendRow([barberId, h.day.toLowerCase(), h.openAM, h.closeAM, h.openPM, h.closePM, "", ""]);
-    }
+  sameBarber.forEach((doc) => firestoreDeleteById('workingHours', doc.id || doc.barberId || ''));
+
+  workingHours.forEach((h) => {
+    const id = `${barberId}_${(h.day || '').toLowerCase()}`;
+    firestoreUpsert('workingHours', id, {
+      id: id,
+      barberId: barberId,
+      day: (h.day || '').toLowerCase(),
+      openAM: h.openAM || '',
+      closeAM: h.closeAM || '',
+      openPM: h.openPM || '',
+      closePM: h.closePM || '',
+      visibilityAll: !!(data.visibility && data.visibility.isAllTime),
+      visibilityNext: !!(data.visibility && data.visibility.isNextTime),
+      visibilityPreview: !!(data.visibility && data.visibility.isPreviewTime)
+    });
   });
 
-  if (currentHoursValues.length > 1) currentHoursValues[1][COL_WORKING_HOURS.VISIBILITY_ALL] = data.visibility.isAllTime;
-  if (currentHoursValues.length > 2) currentHoursValues[2][COL_WORKING_HOURS.VISIBILITY_NEXT] = data.visibility.isNextTime;
-  if (currentHoursValues.length > 3) currentHoursValues[3][COL_WORKING_HOURS.VISIBILITY_PREVIEW] = data.visibility.isPreviewTime;
+  const settingsPayload = {};
+  if (data.settings && data.settings.bookingWindow !== undefined) settingsPayload.BOOKING_WINDOW_DAYS = data.settings.bookingWindow;
+  if (data.settings && data.settings.minBookingDays !== undefined) settingsPayload.MIN_BOOKINGS_DAYS = data.settings.minBookingDays;
+  Object.keys(settingsPayload).forEach((key) => {
+    const collection = firestoreListCollection('settings') || [];
+    const match = collection.find((doc) => (doc.id || doc.key || '') === key);
+    firestoreUpsert('settings', match ? (match.id || key) : key, { id: key, key: key, value: settingsPayload[key] });
+  });
 
-  currentHoursRange.setValues(currentHoursValues);
-
-  const sheetSettings = ss.getSheetByName('Settings');
-  const settingsData = sheetSettings.getDataRange().getValues();
-  const updateSet = (key, val) => {
-    const idx = settingsData.findIndex(row => row[2] === key);
-    if (idx !== -1) sheetSettings.getRange(idx + 1, 2).setValue(val);
-  };
-  if (data.settings.bookingWindow !== undefined) updateSet('BOOKING_WINDOW_DAYS', data.settings.bookingWindow);
-  if (data.settings.minBookingDays !== undefined) updateSet('MIN_BOOKINGS_DAYS', data.settings.minBookingDays);
-
-  return { status: "OK" };
+  return { status: 'OK' };
 }
 
 /**
@@ -92,41 +88,39 @@ function saveWorkingHoursAndSettings(data) {
  * SPOSTATO DA CORE.JS
  */
 function saveGlobalSettings(settingsData, barbersArray) {
-  const ss = getSs();
-  const sheetSettings = ss.getSheetByName('Settings');
-  const currentSettings = sheetSettings.getDataRange().getValues();
+  if (!firestoreIsConfigured()) {
+    return { status: 'ERROR', message: 'Firestore non configurato. Inserisci le proprietà del progetto.' };
+  }
 
-  Object.keys(settingsData).forEach(key => {
-    const rowIndex = currentSettings.findIndex(row => row[2] === key);
-    if (rowIndex !== -1) {
-      sheetSettings.getRange(rowIndex + 1, 2).setValue(settingsData[key]);
+  Object.keys(settingsData || {}).forEach((key) => {
+    const collection = firestoreListCollection('settings') || [];
+    const match = collection.find((doc) => (doc.id || '') === key || (doc.key || '') === key);
+    const payload = { id: key, key: key, value: settingsData[key] };
+    if (match) {
+      firestoreUpsert('settings', match.id || key, payload);
     } else {
-      sheetSettings.appendRow(["", settingsData[key], key]);
+      firestoreUpsert('settings', key, payload);
     }
   });
 
-  const sheetBarbers = ss.getSheetByName('Barbers');
-  const currentBarbersData = sheetBarbers.getDataRange().getValues();
-  const isOwnerSync = barbersArray.some(b => b.id === 'barber_1');
-
-  if (isOwnerSync) {
-    const header = sheetBarbers.getRange(1, 1, 1, 8).getValues();
-    sheetBarbers.clearContents();
-    sheetBarbers.getRange(1, 1, 1, header[0].length).setValues(header);
-    const rowsToBatch = barbersArray.map(b => [b.id, b.nome, b.calendarId, b.email, b.telefono, b.isActive, b.foto, b.password]);
-    if (rowsToBatch.length > 0) {
-      sheetBarbers.getRange(2, 1, rowsToBatch.length, rowsToBatch[0].length).setValues(rowsToBatch);
-    }
-  } else {
-    barbersArray.forEach(b => {
-      const rowIndex = currentBarbersData.findIndex(row => row[0] === b.id);
-      if (rowIndex !== -1) {
-        sheetBarbers.getRange(rowIndex + 1, 2, 1, 7).setValues([[b.nome, b.calendarId, b.email, b.telefono, b.isActive, b.foto, b.password]]);
-      }
+  if (Array.isArray(barbersArray)) {
+    barbersArray.forEach((b) => {
+      const id = b.id || b.barberId || '';
+      if (!id) return;
+      firestoreUpsert('barbers', id, {
+        id: id,
+        name: b.nome || b.name || '',
+        calendarId: b.calendarId || 'primary',
+        email: b.email || '',
+        phone: b.telefono || b.phone || '',
+        isActive: b.isActive !== undefined ? b.isActive : true,
+        photoUrl: b.foto || b.photoUrl || '',
+        password: b.password || ''
+      });
     });
   }
 
-  return { status: "OK" };
+  return { status: 'OK' };
 }
 
 /**
@@ -216,32 +210,23 @@ function getHolidayDate(name, year) {
  * SPOSTATO DA CORE.JS
  */
 function getItalianHolidaysStatus() {
-  const ss = getSs();
-  const sheetHours = ss.getSheetByName('Working_Hours');
-  const lastRow = Math.max(25, sheetHours.getLastRow());
-  const rangeHolidays = sheetHours.getRange(2, 10, lastRow - 1, 4);
-  let dataHours = rangeHolidays.getValues();
-  const currentYear = new Date().getFullYear();
-  const firstValidRow = dataHours.find(r => r[0] !== "");
-  if (!firstValidRow) return [];
-
-  const refreshed = syncHolidayYearDates(dataHours, currentYear);
-  if (refreshed.changed) {
-    rangeHolidays.setValues(refreshed.dataHours);
+  if (!firestoreIsConfigured()) {
+    return [];
   }
-  dataHours = refreshed.dataHours;
 
-  return dataHours
-    .filter(r => r[0] !== "")
-    .map(row => {
-      const date = parseItalianDateString(row[2]);
+  const firestoreDocs = firestoreListCollection('holidays') || [];
+  return (firestoreDocs || [])
+    .filter(doc => doc && (doc.name || doc.holidayName))
+    .map((doc) => {
+      const date = parseItalianDateString(doc.date || doc.iso || doc.dateIso || '');
       return {
-        name: row[0],
-        iso: date ? Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd') : null,
-        display: date ? date.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }) : "",
-        isClosed: (row[1] === true || String(row[1]).toUpperCase() === "TRUE")
+        name: doc.name || doc.holidayName || '',
+        iso: date ? Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd') : (doc.iso || null),
+        display: date ? date.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }) : '',
+        isClosed: !!(doc.isClosed === true || doc.isClosed === 'true' || doc.isClosed === 'TRUE')
       };
-    }).filter(h => h.iso)
+    })
+    .filter(h => h.iso)
     .sort((a, b) => a.iso.localeCompare(b.iso));
 }
 
@@ -253,12 +238,25 @@ function toggleHolidayClosure(iso, name, shouldClose, force = false) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(15000)) return { status: "ERROR", message: "Sistema occupato." };
   try {
-    const sheetHours = getSs().getSheetByName('Working_Hours');
-    const lastRow = Math.max(25, sheetHours.getLastRow());
-    const dataHours = sheetHours.getRange(2, 10, lastRow - 1, 2).getValues();
-    const rowIndex = dataHours.findIndex(r => r[0] === name);
-    if (rowIndex !== -1) {
-      sheetHours.getRange(rowIndex + 2, 11).setValue(shouldClose);
+    if (!firestoreIsConfigured()) {
+      return { status: "ERROR", message: "Firestore non configurato. Inserisci le proprietà del progetto." };
+    }
+
+    const holidays = firestoreListCollection('holidays') || [];
+    const match = holidays.find((doc) => (doc.name || doc.holidayName || '') === name);
+    if (match) {
+      firestoreUpsert('holidays', match.id || match.holidayId || name, {
+        ...match,
+        id: match.id || match.holidayId || name,
+        isClosed: !!shouldClose
+      });
+    } else {
+      firestoreUpsert('holidays', name, {
+        id: name,
+        name: name,
+        iso: iso,
+        isClosed: !!shouldClose
+      });
     }
 
     if (shouldClose) {
@@ -269,15 +267,6 @@ function toggleHolidayClosure(iso, name, shouldClose, force = false) {
         if (res.status === "CONFLICT") allConflicts.push(...res.conflicts);
       }
       if (allConflicts.length > 0 && !force) return { status: "CONFLICT", conflicts: allConflicts };
-    } else {
-      const sheet = getSs().getSheetByName('Bookings');
-      const data = sheet.getDataRange().getValues();
-      for (let i = data.length - 1; i >= 1; i--) {
-        let rowDate = data[i][COL_BOOKING.ISO_START] ? parseItalianDateString(data[i][COL_BOOKING.ISO_START]).toISOString().split('T')[0] : "";
-        if (rowDate === iso && (data[i][COL_BOOKING.SERVICE] || "").toString() === name && (data[i][COL_BOOKING.STATUS] || "").toLowerCase() === 'indisponibile') {
-          sheet.deleteRow(i + 1);
-        }
-      }
     }
     return { status: "OK" };
   } finally { lock.releaseLock(); }
@@ -291,45 +280,54 @@ function manageCustomHoliday(action, holidayData) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(15000)) return { status: "ERROR", message: "Sistema occupato." };
   try {
-    const ss = getSs();
-    const sheetHours = ss.getSheetByName('Working_Hours');
-    const lastRow = Math.max(25, sheetHours.getLastRow());
-    const rangeHolidays = sheetHours.getRange(2, 10, lastRow - 1, 4);
-    let holidays = rangeHolidays.getValues().filter(r => r[0] !== "");
+    if (!firestoreIsConfigured()) {
+      return { status: "ERROR", message: "Firestore non configurato. Inserisci le proprietà del progetto." };
+    }
+
+    const holidays = firestoreListCollection('holidays') || [];
+    const fullName = `${holidayData.name} (${holidayData.dateStr})`;
 
     if (action === 'add') {
-      const fullName = `${holidayData.name} (${holidayData.dateStr})`;
-      if (holidays.some(h => h[0] === fullName)) return { status: "ERROR", message: "Questa ricorrenza esiste già." };
+      if (holidays.some(h => (h.name || h.holidayName || '') === fullName)) {
+        return { status: "ERROR", message: "Questa ricorrenza esiste già." };
+      }
       const parts = holidayData.dateStr.split('/');
       const currentYear = new Date().getFullYear();
       const dateCur = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
       const dateNext = new Date(currentYear + 1, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-      holidays.push([fullName, false, formatHolidayDateValue(dateCur), formatHolidayDateValue(dateNext)]);
-    } else {
-        const nameToFind = action === 'edit' ? holidayData.oldName : holidayData.name;
-        const idx = holidays.findIndex(h => h[0] === nameToFind);
-        if (idx !== -1) {
-            if ((holidays[idx][1] === true || holidays[idx][1] === "TRUE")) {
-                const holidayDate = parseItalianDateString(holidays[idx][2]);
-                toggleHolidayClosure(holidayDate ? Utilities.formatDate(holidayDate, Session.getScriptTimeZone(), 'yyyy-MM-dd') : '', holidays[idx][0], false);
-            }
-            if (action === 'edit') {
-                const parts = holidayData.dateStr.split('/');
-                const currentYear = new Date().getFullYear();
-                holidays[idx][0] = `${holidayData.name} (${holidayData.dateStr})`;
-                holidays[idx][1] = false;
-                holidays[idx][2] = formatHolidayDateValue(new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)));
-                holidays[idx][3] = formatHolidayDateValue(new Date(currentYear + 1, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)));
-            } else { // delete
-                holidays.splice(idx, 1);
-            }
-        }
+      firestoreUpsert('holidays', fullName, {
+        id: fullName,
+        name: fullName,
+        iso: Utilities.formatDate(dateCur, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+        nextIso: Utilities.formatDate(dateNext, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+        isClosed: false
+      });
+      return { status: "OK", holidays: getItalianHolidaysStatus() };
     }
 
-    sheetHours.getRange(2, 10, lastRow - 1, 4).clearContent();
-    if (holidays.length > 0) {
-      sheetHours.getRange(2, 10, holidays.length, 4).setValues(holidays);
+    if (action === 'delete' || action === 'edit') {
+      const target = action === 'edit' ? holidayData.oldName : holidayData.name;
+      const match = holidays.find(h => (h.name || h.holidayName || '') === target || (h.id || '') === target);
+      if (match) {
+        if (action === 'edit') {
+          const parts = holidayData.dateStr.split('/');
+          const currentYear = new Date().getFullYear();
+          const dateCur = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+          const dateNext = new Date(currentYear + 1, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+          firestoreUpsert('holidays', match.id || target, {
+            ...match,
+            id: match.id || target,
+            name: fullName,
+            iso: Utilities.formatDate(dateCur, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+            nextIso: Utilities.formatDate(dateNext, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+            isClosed: false
+          });
+        } else {
+          firestoreDeleteById('holidays', match.id || target);
+        }
+      }
     }
+
     return { status: "OK", holidays: getItalianHolidaysStatus() };
   } finally { lock.releaseLock(); }
 }
@@ -341,79 +339,40 @@ function manageCustomHoliday(action, holidayData) {
  * Imposta anche un trigger per eseguire questo controllo mensilmente.
  */
 function syncHolidaysAndCreateTriggers() {
-  const ss = getSs();
-  const sheetHours = ss.getSheetByName('Working_Hours');
-  const lastRow = Math.max(25, sheetHours.getLastRow());
-  const rangeHolidays = sheetHours.getRange(2, 10, lastRow - 1, 4);
-  let holidaysData = rangeHolidays.getValues();
-  const currentYear = new Date().getFullYear();
-  const refreshed = syncHolidayYearDates(holidaysData, currentYear);
-  if (refreshed.changed) {
-    rangeHolidays.setValues(refreshed.dataHours);
-    holidaysData = refreshed.dataHours;
+  if (!firestoreIsConfigured()) {
+    return { status: "ERROR", message: "Firestore non configurato. Inserisci le proprietà del progetto." };
   }
 
-  const closedHolidayEntries = [];
-  refreshed.dataHours.forEach(row => {
-    if (!row[0]) return;
-    const isClosed = (row[1] === true || String(row[1]).toUpperCase() === "TRUE");
-    if (!isClosed) return;
-
-    const thisYearDate = parseItalianDateString(row[2]);
-    if (thisYearDate) {
-      closedHolidayEntries.push({
-        name: row[0],
-        iso: Utilities.formatDate(thisYearDate, Session.getScriptTimeZone(), 'yyyy-MM-dd')
-      });
-    }
-
-    const nextYearDate = parseItalianDateString(row[3]);
-    if (nextYearDate) {
-      closedHolidayEntries.push({
-        name: row[0],
-        iso: Utilities.formatDate(nextYearDate, Session.getScriptTimeZone(), 'yyyy-MM-dd')
-      });
-    }
-  });
+  const holidays = firestoreListCollection('holidays') || [];
+  const closedHolidayEntries = (holidays || []).filter(doc => !!(doc.isClosed === true || doc.isClosed === 'true' || doc.isClosed === 'TRUE'));
 
   if (closedHolidayEntries.length === 0) {
     console.log("Nessuna festività chiusa da sincronizzare.");
     return { status: "OK", message: "Nessuna festività chiusa." };
   }
 
-  const bookingsSheet = ss.getSheetByName('Bookings');
-  const bookingsData = bookingsSheet.getDataRange().getValues();
-  const barbers = getBarbersList(); // Prende solo i barbieri attivi
-
-  closedHolidayEntries.forEach(holiday => {
-    const holidayDateStr = holiday.iso; // Formato YYYY-MM-DD
+  const barbers = getBarbersList();
+  closedHolidayEntries.forEach((holiday) => {
+    const holidayDateStr = holiday.iso || holiday.date || '';
+    if (!holidayDateStr) return;
 
     for (const barberId in barbers) {
-      const isAlreadyBooked = bookingsData.some(row => {
-        const rowDate = parseItalianDateString(row[COL_BOOKING.ISO_START]);
-        if (!rowDate) return false;
-        const rowDateStr = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-
-        return row[COL_BOOKING.BARBER_ID] === barberId &&
+      const bookings = firestoreListCollection('bookings') || [];
+      const isAlreadyBooked = bookings.some((row) => {
+        const rowDate = row.startISO || row.start || '';
+        const rowDateStr = rowDate ? new Date(rowDate).toISOString().split('T')[0] : '';
+        return row.barberId === barberId &&
                rowDateStr === holidayDateStr &&
-               (row[COL_BOOKING.STATUS] || "").toLowerCase() === 'indisponibile' &&
-               (row[COL_BOOKING.SERVICE] || "") === holiday.name;
+               (row.status || '').toLowerCase() === 'indisponibile' &&
+               (row.service || '') === (holiday.name || holiday.holidayName || '');
       });
 
       if (!isAlreadyBooked) {
-        console.log(`Creazione indisponibilità per ${holiday.name} (${holidayDateStr}) per il barbiere ${barberId}`);
-        saveIndisponibilitaRange(barberId, holidayDateStr, holidayDateStr, "00:00", "23:59", holiday.name, true);
+        console.log(`Creazione indisponibilità per ${holiday.name || holiday.holidayName} (${holidayDateStr}) per il barbiere ${barberId}`);
+        saveIndisponibilitaRange(barberId, holidayDateStr, holidayDateStr, "00:00", "23:59", holiday.name || holiday.holidayName || '', true);
       }
     }
   });
-
-  // Imposta il trigger per l'esecuzione mensile, se non esiste già
-  const triggers = ScriptApp.getProjectTriggers();
-  const triggerExists = triggers.some(t => t.getHandlerFunction() === 'syncHolidaysAndCreateTriggers');
-  if (!triggerExists) {
-    ScriptApp.newTrigger('syncHolidaysAndCreateTriggers').timeBased().onMonthDay(1).atHour(3).create();
-    console.log("Trigger mensile per syncHolidays creato.");
-  }
 
   return { status: "OK", message: "Sincronizzazione festività completata." };
 }

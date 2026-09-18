@@ -197,7 +197,7 @@ input:focus {
 .popup-overlay {
   position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
   background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px); z-index: 19999;
+  -webkit-backdrop-filter: blur(8px); z-index: 2147483647 !important;
   display: flex; justify-content: center; align-items: center;
 }
 

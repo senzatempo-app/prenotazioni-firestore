@@ -282,8 +282,8 @@ function showServiceEditor(oldName = null) {
                 <input type="number" id="ed-svc-price" value="${svc.price ?? ''}" placeholder="Es. 20">
             </div>
             <div>
-                <label class="detail-label">URL Immagine</label>
-                <input type="text" id="ed-svc-img" value="${svc.imageUrl}" placeholder="http://...">
+                <label class="detail-label">Foto Servizio (cartella Photo)</label>
+                <input type="text" id="ed-svc-img" value="${svc.imageUrl || ''}" placeholder="Es. Taglio.png o Taglio.jpeg (opzionale)">
             </div>
         </div>`;
     const actionsHtml = `

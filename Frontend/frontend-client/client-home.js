@@ -6,14 +6,18 @@
  * Genera l'HTML per il modulo di registrazione del cliente.
  * @returns {string} La stringa HTML del modulo.
  */
-function getRegistrationFormHtml() {
+function getRegistrationFormHtml(prefill = {}) {
+  const pNome = prefill.nome || '';
+  const pCognome = prefill.cognome || '';
+  const pTel = prefill.telefono || '';
+  const pEmail = prefill.email || '';
   return `
     <img src="./Frontend/assets/logo-full-maskable.png" alt="Logo" style="width: 280px; margin: 0 auto 20px; display: block;">
     <p style="text-align: center; color: #666; margin-bottom: 20px;">Accedi per iniziare a prenotare il tuo appuntamento.</p>
-    <input type="text" id="userName" name="first-name" placeholder="Nome" autocomplete="given-name" required onkeydown="if(event.key === 'Enter') saveClientUser()">
-    <input type="text" id="userSurname" name="last-name" placeholder="Cognome" autocomplete="family-name" required onkeydown="if(event.key === 'Enter') saveClientUser()">
-    <input type="tel" id="userPhone" name="phone" placeholder="Telefono" autocomplete="tel" required onkeydown="if(event.key === 'Enter') saveClientUser()">
-    <input type="email" id="userEmail" name="email" placeholder="Email" autocomplete="email" required onkeydown="if(event.key === 'Enter') saveClientUser()">
+    <input type="text" id="userName" name="first-name" placeholder="Nome" autocomplete="given-name" value="${pNome}" required onkeydown="if(event.key === 'Enter') saveClientUser()">
+    <input type="text" id="userSurname" name="last-name" placeholder="Cognome" autocomplete="family-name" value="${pCognome}" required onkeydown="if(event.key === 'Enter') saveClientUser()">
+    <input type="tel" id="userPhone" name="phone" placeholder="Telefono" autocomplete="tel" value="${pTel}" required onkeydown="if(event.key === 'Enter') saveClientUser()">
+    <input type="email" id="userEmail" name="email" placeholder="Email" autocomplete="email" value="${pEmail}" required onkeydown="if(event.key === 'Enter') saveClientUser()">
     <button class="login-button" onclick="saveClientUser()">Accedi</button>
   `;
 }
@@ -21,7 +25,7 @@ function getRegistrationFormHtml() {
 /**
  * Logica e Rendering della pagina di Registrazione Clienti
  */
-function renderRegistrationPage(skipPush = false) {
+function renderRegistrationPage(skipPush = false, prefill = {}) {
   window.scrollTo(0, 0);
   if (!skipPush) pushView('registration');
 
@@ -29,7 +33,7 @@ function renderRegistrationPage(skipPush = false) {
   if (cachedAppData && cachedAppData.settings) {
     const settings = cachedAppData.settings;
     document.title = settings.BUSINESS_NAME || 'Il Tuo Business';
-    appContainer.innerHTML = `<div id="registration-screen" class="full-screen"><div class="registration-content">${getRegistrationFormHtml()}</div></div>`;
+    appContainer.innerHTML = `<div id="registration-screen" class="full-screen"><div class="registration-content">${getRegistrationFormHtml(prefill)}</div></div>`;
     return;
   }
 
@@ -39,7 +43,7 @@ function renderRegistrationPage(skipPush = false) {
     .withFailureHandler(showNetworkError)
     .withSuccessHandler(settings => {
       document.title = settings.BUSINESS_NAME || 'Il Tuo Business';
-      appContainer.innerHTML = `<div id="registration-screen" class="full-screen"><div class="registration-content">${getRegistrationFormHtml()}</div></div>`;
+      appContainer.innerHTML = `<div id="registration-screen" class="full-screen"><div class="registration-content">${getRegistrationFormHtml(prefill)}</div></div>`;
     }).getSettings();
 }
 
@@ -73,10 +77,33 @@ function saveClientUser() {
       .withFailureHandler(showNetworkError) // Mostra un errore di rete se il caricamento dati fallisce
       .getAppInitData(serverUser.email);
   }).withFailureHandler(err => {
-    showCustomAlert("Errore registrazione", "Dettaglio errore: " + err, () => {
-      renderRegistrationPage();
-    });
+    // Ripristina immediatamente il modulo di registrazione togliendo lo spinner
+    renderRegistrationPage(true, { nome, cognome, email, telefono });
+    showCustomAlert("Attenzione", err || "Impossibile completare l'accesso. Verifica i dati inseriti.");
   }).registerOrUpdateUser({ nome: capitalizeFirst(nome), cognome: capitalizeFirst(cognome), email, telefono });
+}
+
+/**
+ * Precarica silenziosamente le foto effettive di servizi e barbieri in cache del browser
+ */
+function preloadAppPhotos(data) {
+  if (!data) return;
+  const urls = [];
+  if (Array.isArray(data.services)) {
+    data.services.forEach(s => {
+      if (s.imageUrl) urls.push(s.imageUrl);
+    });
+  }
+  if (data.barbers) {
+    for (const bId in data.barbers) {
+      const b = data.barbers[bId];
+      if (b.foto) urls.push(b.foto);
+    }
+  }
+  [...new Set(urls.filter(Boolean))].forEach(url => {
+    const img = new Image();
+    img.src = url;
+  });
 }
 
 function renderHomePage(skipPush = false, skipAnimation = false) {
@@ -85,6 +112,7 @@ function renderHomePage(skipPush = false, skipAnimation = false) {
   // Funzione interna per il rendering effettivo della UI
   const displayUI = (data) => {
     cachedAppData = data;
+    preloadAppPhotos(data);
     const animClass = skipAnimation ? '' : 'fade-in';
 
     const settings = data.settings;
@@ -236,7 +264,7 @@ function showAccountPopup() {
   `;
   const overlay = createPopup('account-overlay', '<span style="color: #8A9A5B;">Il mio Profilo</span>', contentHtml, actionsHtml);
 
-  document.getElementById('cancel-profile-btn').onclick = () => closeAllPopupsAndRedirect(renderHomePage, true);
+  document.getElementById('cancel-profile-btn').onclick = () => closeAllPopupsAndRedirect();
   document.getElementById('saveProfileBtn').onclick = () => saveUpdatedUser();
 }
 
@@ -261,23 +289,33 @@ function saveUpdatedUser() {
 
   showButtonSpinner(btn);
 
-  google.script.run.withSuccessHandler((res) => {
-    if (res && res.status === "OK") {
-      // Aggiorna stato locale
-      userData = updatedData;
-      localStorage.setItem('client_user', JSON.stringify(userData));
-      cachedAppData = null; // Forza ricaricamento dati
+  google.script.run
+    .withFailureHandler(err => {
+      hideButtonSpinner(btn);
+      showCustomAlert("Errore", err || "Impossibile aggiornare i dati del profilo.");
+    })
+    .withSuccessHandler((res) => {
+      if (res && res.status === "OK") {
+        // Aggiorna stato locale preservando clientId, cutTime e le statistiche
+        userData = { ...userData, ...updatedData, ...(res.data || {}) };
+        localStorage.setItem('client_user', JSON.stringify(userData));
 
-      // Chiudi il popup e ricarica la home in modo "silenzioso" per mostrare le modifiche.
-      closeAllPopupsAndRedirect(renderHomePage, true);
-    } else if (res && res.message) {
-      hideButtonSpinner(btn);
-      showCustomAlert("Errore", res.message);
-    } else {
-      hideButtonSpinner(btn);
-      showCustomAlert("Errore", "Errore durante l'aggiornamento. Riprova.");
-    }
-  }).updateClientData(oldEmail, updatedData);
+        // Aggiorna sul posto il saluto con il nome modificato (senza ricaricare la pagina)
+        const greetingHeader = document.querySelector("#home-screen h2");
+        if (greetingHeader && userData.nome) {
+          greetingHeader.innerText = `Ciao, ${userData.nome}!`;
+        }
+
+        // Chiude il popup del profilo all'istante senza alcun refresh o animazione della home
+        closeAllPopupsAndRedirect();
+      } else if (res && res.message) {
+        hideButtonSpinner(btn);
+        showCustomAlert("Errore", res.message);
+      } else {
+        hideButtonSpinner(btn);
+        showCustomAlert("Errore", "Errore durante l'aggiornamento. Riprova.");
+      }
+    }).updateClientData(oldEmail, updatedData);
 }
 
 /**
@@ -295,11 +333,11 @@ function renderContattiPage(skipPush = false) {
   let barbersHtml = '';
   for (const id in barbers) {
     const b = barbers[id];
-    const bPhoto = b.foto || `https://via.placeholder.com/200/8A9A5B/ffffff?text=${b.nome.charAt(0)}`;
+    const bPhoto = b.foto || `./Frontend/Photo/${b.nome}.jpg`;
     const waLink = b.telefono ? `https://wa.me/${b.telefono.toString().replace(/\D/g, '')}` : '#';
     barbersHtml += `
           <a href="${waLink}" target="_blank" class="barber-contact-card">
-            <img src="${bPhoto}" class="barber-card-img" alt="${b.nome}">
+            <img src="${bPhoto}" class="barber-card-img" alt="${b.nome}" onerror="if(!this.dataset.tried){this.dataset.tried=1; this.src=this.src.endsWith('.png')?this.src.replace('.png','.jpg'):this.src.replace('.jpg','.png');}">
             <div class="barber-card-info">
               <div class="barber-card-name">${b.nome}</div>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="#25D366"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>

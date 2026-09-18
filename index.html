@@ -10,12 +10,9 @@
 
   <!-- Favicon e Icone PWA -->
   <link rel="icon" type="image/png" href="./Frontend/assets/favicon.png">
-  <!-- Absolute path to ensure browsers requesting /favicon.png or root use the intended icon -->
-  <link rel="icon" type="image/png" href="/prenotazioni/Frontend/assets/favicon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./Frontend/assets/icon-192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="./Frontend/assets/icon-512.png">
   <link rel="shortcut icon" href="./Frontend/assets/favicon.png">
-  <link rel="shortcut icon" href="/prenotazioni/Frontend/assets/favicon.png">
   <link rel="apple-touch-icon" sizes="180x180" href="./Frontend/assets/apple-touch-icon.png">
   <link rel="manifest" href="./Frontend/manifest.json">
 
@@ -34,6 +31,9 @@
     <!-- Il contenuto viene generato dinamicamente via JS -->
   </div>
 
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="./Frontend/firebase-client-store.js"></script>
   <script src="./Frontend/api-bridge.js"></script>
   <script src="./Frontend/frontend-utils.js"></script>
   <script src="./Frontend/frontend-client/client-home.js"></script>
@@ -60,9 +60,15 @@
     };
 
     window.onpopstate = function (event) {
+      // Se stiamo semplicemente chiudendo un popup (come quello del profilo), non ricaricare o rianimare la home
+      if (window.isClosingPopup) {
+        window.isClosingPopup = false;
+        return;
+      }
+
       const view = event.state?.view;
       if (!view || view === 'home') {
-        renderHomePage(true); // true = evita di creare un loop nella history
+        renderHomePage(true, true); // true, true = evita loop nella history e salta le animazioni delle card
       } else {
         const viewMap = {
           'registration': renderRegistrationPage,
@@ -105,6 +111,7 @@
         const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
         document.querySelector('link[rel="manifest"]').setAttribute('href', URL.createObjectURL(blob));
         document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute('content', 'Prenotazioni');
+        if (typeof preloadAppPhotos === 'function') preloadAppPhotos(data);
 
         // In attesa che gli script siano caricati
         setTimeout(() => {

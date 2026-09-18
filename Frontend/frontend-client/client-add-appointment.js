@@ -78,7 +78,7 @@ function renderPrenotazionePage(skipPush = false) {
     if (!container) return;
     container.innerHTML = cachedAppData.services.map(s => {
       const formattedName = s.name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-      const imageUrl = s.imageUrl || "https://via.placeholder.com/150/1a1a1a/ffffff?text=" + formattedName.split(' ')[0];
+      const imageUrl = s.imageUrl || (typeof resolveLocalPhotoUrl === 'function' ? resolveLocalPhotoUrl(s.photoName, s.name) : `./Frontend/Photo/${s.name}.png`);
       return `
         <div class="service-card" onclick="selectService(this, '${s.name}', ${s.duration})" style="background-image: url('${imageUrl}')">
           <div class="service-name">${formattedName}</div>
@@ -278,6 +278,7 @@ function renderPrenotazionePage(skipPush = false) {
             .withFailureHandler(() => { isFetchingInitData = false; })
             .getAppInitData(userData.email);
           closeAllPopupsAndRedirect(); // Chiudi tutti i popup prima di renderizzare la schermata di successo
+          const formattedDate = formatFullItalianDate(bookingState.day || (bookingState.slot && bookingState.slot.iso));
           appContainer.innerHTML = `
             <div class="success-container">
               <div style="margin-bottom: 20px; color: #8A9A5B;">
@@ -285,10 +286,8 @@ function renderPrenotazionePage(skipPush = false) {
               </div>
               <h2 style="margin-bottom: 20px;">Prenotazione Confermata!</h2>
               <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; text-transform: capitalize; margin-bottom: 2px;">${bookingState.service.name.replace(/_/g, ' ')}</p>
-              <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; text-transform: capitalize; margin-bottom: 2px;">${bookingState.slot.formatted}</p>
+              <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; margin-bottom: 2px;">${formattedDate}</p>
               <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; margin-bottom: 2px;">Ore ${bookingState.slot.time}</p>
-              <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Barbiere: ${bookingState.slot.barberName}</p>
-              <p style="margin-bottom: 10px; margin-top: 20px;">Troverai tutti i dettagli nei tuoi appuntamenti.</p>
               <button onclick="renderHomePage()" style="background: transparent; color: #8A9A5B; border: none; font-weight: 700; text-transform: uppercase; margin-top: 30px; width: 100%; cursor: pointer; padding: 15px;">Chiudi</button>
             </div>
           `;

@@ -151,24 +151,32 @@ function saveEditedClient(clientId, oldIdentifier) {
     if (errorEl) errorEl.style.display = 'none';
     showButtonSpinner(btn);
 
-    google.script.run.withSuccessHandler((res) => {
-        if (res && res.status === "OK") {
-            // Aggiorna la cache locale con i dati modificati
-            const clientIndex = cachedAppData.clients.findIndex(c => c.id === clientId);
-            if (clientIndex !== -1) {
-                cachedAppData.clients[clientIndex] = { ...cachedAppData.clients[clientIndex], ...updatedData, id: clientId };
-            }
-            window.allClientsData = cachedAppData.clients;
-            // Chiude il popup e aggiorna la lista, confermando implicitamente il successo
-            closeAllPopupsAndRedirect(renderBarberClientsListPage, true);
-        } else {
+    google.script.run
+        .withFailureHandler(err => {
             hideButtonSpinner(btn);
             if (errorEl) {
-                errorEl.innerText = res.message || "Impossibile aggiornare i dati.";
+                errorEl.innerText = err || "Impossibile aggiornare i dati.";
                 errorEl.style.display = 'block';
             }
-        }
-    }).updateClientData(oldIdentifier, updatedData);
+        })
+        .withSuccessHandler((res) => {
+            if (res && res.status === "OK") {
+                // Aggiorna la cache locale con i dati modificati
+                const clientIndex = cachedAppData.clients.findIndex(c => c.id === clientId);
+                if (clientIndex !== -1) {
+                    cachedAppData.clients[clientIndex] = { ...cachedAppData.clients[clientIndex], ...updatedData, id: clientId };
+                }
+                window.allClientsData = cachedAppData.clients;
+                // Chiude il popup e aggiorna la lista, confermando implicitamente il successo
+                closeAllPopupsAndRedirect(renderBarberClientsListPage, true);
+            } else {
+                hideButtonSpinner(btn);
+                if (errorEl) {
+                    errorEl.innerText = res.message || "Impossibile aggiornare i dati.";
+                    errorEl.style.display = 'block';
+                }
+            }
+        }).updateClientData(oldIdentifier, updatedData);
 }
 
 function showNewClientFormForList() {
@@ -258,17 +266,22 @@ function confirmRemoveClient(clientId, clientName) {
         const btn = document.getElementById('confirmRemoveClientBtn');
         showButtonSpinner(btn);
 
-        google.script.run.withSuccessHandler(res => {
-            if (res && res.status === "OK") {
-                showCustomAlert("Successo", "Cliente eliminato correttamente.");
-                // Aggiorniamo i dati locali e rirenderizziamo
-                cachedAppData.clients = cachedAppData.clients.filter(c => c.id !== clientId);
-                window.allClientsData = cachedAppData.clients;
-                closeAllPopupsAndRedirect(renderBarberClientsListPage, true);
-            } else {
+        google.script.run
+            .withFailureHandler(err => {
                 hideButtonSpinner(btn);
-                showCustomAlert("Errore", res.message || "Impossibile eliminare il cliente.");
-            }
-        }).deleteClient(clientId);
+                showCustomAlert("Errore", err || "Impossibile eliminare il cliente.");
+            })
+            .withSuccessHandler(res => {
+                if (res && res.status === "OK") {
+                    showCustomAlert("Successo", "Cliente eliminato correttamente.");
+                    // Aggiorniamo i dati locali e rirenderizziamo
+                    cachedAppData.clients = cachedAppData.clients.filter(c => c.id !== clientId);
+                    window.allClientsData = cachedAppData.clients;
+                    closeAllPopupsAndRedirect(renderBarberClientsListPage, true);
+                } else {
+                    hideButtonSpinner(btn);
+                    showCustomAlert("Errore", res.message || "Impossibile eliminare il cliente.");
+                }
+            }).deleteClient(clientId);
     };
 }

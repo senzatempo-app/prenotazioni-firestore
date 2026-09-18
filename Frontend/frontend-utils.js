@@ -21,11 +21,11 @@ spinnerStyle.textContent = `
 document.head.appendChild(spinnerStyle);
 
 let openPopupStack = [];
-let isClosingPopup = false; // Flag per evitare loop con popstate
+window.isClosingPopup = false; // Flag globale per evitare loop e re-rendering con popstate
 
 window.addEventListener('popstate', (event) => {
     // Se stiamo già chiudendo un popup programmaticamente, ignoriamo questo evento.
-    if (isClosingPopup) { isClosingPopup = false; return; }
+    if (window.isClosingPopup) { window.isClosingPopup = false; return; }
     if (openPopupStack.length > 0 && event.state && event.state.popup) {
         // Non preveniamo l'evento, ma chiudiamo il popup.
         // La navigazione indietro rimuoverà lo stato {popup: true} che abbiamo aggiunto.
@@ -110,7 +110,7 @@ function openPopup(overlay) {
  * @param {boolean} [isSilent=true] - Passato alla funzione di rendering, tipicamente per evitare animazioni o ricaricamenti completi se i dati sono in cache.
  */
 function closeAllPopupsAndRedirect(targetPageRenderFunction = null, isSilent = false) {
-    isClosingPopup = true; // Imposta il flag prima di modificare la cronologia
+    window.isClosingPopup = true; // Imposta il flag prima di modificare la cronologia
     // Contiamo quanti popup dobbiamo chiudere PRIMA di rimuoverli dal DOM.
     const popupsToCloseCount = openPopupStack.length;
 
@@ -384,6 +384,34 @@ function formatDateToItalian(iso) {
 }
 
 /**
+ * Converte una data ISO o YYYY-MM-DD nel formato esteso "Lunedì 15 settembre 2026"
+ */
+function formatFullItalianDate(dateInput) {
+    if (!dateInput) return '';
+    let d;
+    if (typeof dateInput === 'string' && dateInput.includes('T')) {
+        d = new Date(dateInput);
+    } else if (typeof dateInput === 'string' && dateInput.includes('-')) {
+        const parts = dateInput.split('-');
+        d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    } else {
+        d = new Date(dateInput);
+    }
+
+    if (isNaN(d.getTime())) return '';
+
+    const days = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
+    const months = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
+
+    const dayName = days[d.getDay()];
+    const dayNum = d.getDate();
+    const monthName = months[d.getMonth()];
+    const year = d.getFullYear();
+
+    return `${dayName} ${dayNum} ${monthName} ${year}`;
+}
+
+/**
  * Normalizza un numero di telefono per il confronto (versione Frontend).
  * Rimuove tutto ciò che non è un numero e gestisce i prefissi italiani.
  * @param {string} phone - Il numero di telefono da normalizzare.
@@ -427,18 +455,10 @@ function parseTimeString(timeStr) {
 function getBookingDays(settings, workingHours) {
     const now = new Date();
     let minDays = parseInt(settings.MIN_BOOKINGS_DAYS, 10);
-    if (isNaN(minDays)) {
-        if (settings.MIN_BOOKINGS_DAYS === 'next_week') {
-            const today = new Date();
-            const dayOfWeek = today.getDay();
-            let daysUntilMonday = (dayOfWeek === 0) ? 1 : (7 - dayOfWeek + 1) % 7;
-            if (daysUntilMonday === 0) daysUntilMonday = 7;
-            minDays = daysUntilMonday;
-        } else {
-            minDays = 0;
-        }
+    if (isNaN(minDays) || minDays < 0) {
+        minDays = 0;
     }
-    const windowDays = parseInt(settings.BOOKING_WINDOW_DAYS, 10) || 10;
+    const windowDays = parseInt(settings.BOOKING_WINDOW_DAYS, 10) || 15;
     const daysNames = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
     const allBarberIds = Object.keys(workingHours).filter(key => key !== '_visibility');
 
@@ -496,12 +516,12 @@ function getBarberColumnsHtml(allSlots, targetDay, barbers, onSelectSlotName) {
             }
         } catch (e) { customHtml = ''; }
 
-        const bPhoto = barber.foto || "https://via.placeholder.com/100/8A9A5B/ffffff?text=" + barber.nome.charAt(0);
+        const bPhoto = barber.foto || `./Frontend/Photo/${barber.nome || 'sergio'}.jpg`;
 
         html += `
             <div class="barber-col">
                 <div class="barber-info-header">
-                    <img src="${bPhoto}" class="barber-photo" style="width:50px; height:50px;" alt="${barber.nome}">
+                    <img src="${bPhoto}" class="barber-photo" style="width:50px; height:50px;" alt="${barber.nome}" onerror="if(!this.dataset.tried){this.dataset.tried=1; this.src=this.src.endsWith('.png')?this.src.replace('.png','.jpg'):this.src.replace('.jpg','.png');}">
                     <div class="barber-name-header" style="font-size:0.85em;">${barber.nome}</div>
                 </div>
                 ${slotsHtml}
