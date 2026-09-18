@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "senzatempo-database"
-  }
+  },
+  "targets": {
+    "senzatempo-database": {
+      "hosting": {
+        "app": [
+          "senzatempo-prenotazioni"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }
