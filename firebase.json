@@ -1,0 +1,47 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "**/.*",
+      "**/node_modules/**",
+      "Backend GAS/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/admin",
+        "destination": "/admin.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/Frontend/Photo/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "max-age=86400, public"
+          }
+        ]
+      },
+      {
+        "source": "/Frontend/assets/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "max-age=86400, public"
+          }
+        ]
+      },
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "max-age=3600, public"
+          }
+        ]
+      }
+    ]
+  }
+}
