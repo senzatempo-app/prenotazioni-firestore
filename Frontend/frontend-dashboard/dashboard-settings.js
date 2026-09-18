@@ -22,8 +22,8 @@ window.createBarberBlockHtml = function(id, b) {
                     <input type="text" class="barber-inp" data-id="${id}" data-f="nome" value="${b.nome || ''}" placeholder="Nome del barbiere">
                 </div>
                 <div style="text-align: left;">
-                    <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">ID Calendario Google</label>
-                    <input type="text" class="barber-inp" data-id="${id}" data-f="calendarId" value="${b.calendarId || 'primary'}" placeholder="Indirizzo email del calendario">
+                    <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">ID Calendario / Link</label>
+                    <input type="text" class="barber-inp" data-id="${id}" data-f="calendarId" value="${b.calendarId || 'primary'}" placeholder="Indirizzo email o link del calendario">
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Email di Login</label>
@@ -35,7 +35,7 @@ window.createBarberBlockHtml = function(id, b) {
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Foto Profilo (cartella Photo)</label>
-                    <input type="text" class="barber-inp" data-id="${id}" data-f="foto" value="${b.foto || ''}" placeholder="Es. Sergio.jpg (o lascia vuoto)">
+                    <input type="text" class="barber-inp" data-id="${id}" data-f="foto" value="${b.photoName || b.foto || ''}" placeholder="Es. barber_1 (o lascia vuoto)">
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Password Dashboard</label>
@@ -80,7 +80,6 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
     appContainer.innerHTML = `
         <div id="barber-settings-screen" class="full-screen">
             <div class="fixed-header">
-                <button onclick="renderBarberDashboardPage();" class="header-back-btn">
                 <button onclick="handleBackFromSettings();" class="header-back-btn">
                     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
                 </button>

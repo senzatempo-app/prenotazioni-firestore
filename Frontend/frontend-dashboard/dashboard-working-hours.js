@@ -283,7 +283,7 @@ function showServiceEditor(oldName = null) {
             </div>
             <div>
                 <label class="detail-label">Foto Servizio (cartella Photo)</label>
-                <input type="text" id="ed-svc-img" value="${svc.imageUrl || ''}" placeholder="Es. Taglio.png o Taglio.jpeg (opzionale)">
+                <input type="text" id="ed-svc-img" value="${svc.photoName || (svc.imageUrl ? svc.imageUrl.replace(/^\.\/Frontend\/Photo\//, '') : '')}" placeholder="Es. Taglio.jpg o Taglio.png (opzionale)">
             </div>
         </div>`;
     const actionsHtml = `
@@ -296,12 +296,14 @@ function showServiceEditor(oldName = null) {
 
     document.getElementById('saveSvcAdminBtn').onclick = () => {
         const btn = document.getElementById('saveSvcAdminBtn');
+        const imgInputVal = document.getElementById('ed-svc-img').value.trim();
         const data = {
             oldName: oldName,
             name: document.getElementById('ed-svc-name').value.trim(),
             duration: document.getElementById('ed-svc-dur').value,
             price: document.getElementById('ed-svc-price').value,
-            imageUrl: document.getElementById('ed-svc-img').value.trim(),
+            photoName: imgInputVal,
+            imageUrl: imgInputVal,
             isActive: svc.isActive // Mantiene lo stato attuale selezionato in lista
         };
         if(!data.name || !data.duration) { showCustomAlert("Errore", "Nome e durata obbligatori."); return; }
@@ -315,7 +317,8 @@ function showServiceEditor(oldName = null) {
                         name: data.name, 
                         duration: parseInt(data.duration) || 0, 
                         price: parseFloat(data.price) || 0, 
-                        imageUrl: data.imageUrl, 
+                        photoName: data.photoName,
+                        imageUrl: (typeof resolveLocalPhotoUrl === 'function') ? resolveLocalPhotoUrl(data.photoName, data.name, false) : data.imageUrl, 
                         isActive: data.isActive 
                     };
                     if (oldName) {
