@@ -143,14 +143,29 @@ function renderPersonalCommitmentsListPage(skipPush = false) {
         </div>
     `;
 
+    // Fallback se gli appuntamenti non sono ancora in cache
+    if (!cachedBarberAppointments && currentDisplayedBarberId) {
+        google.script.run.withSuccessHandler(apps => {
+            cachedBarberAppointments = apps || [];
+            renderPersonalCommitmentsListPage(true);
+        }).getBarberAppointments(currentDisplayedBarberId);
+        return;
+    }
+
     // Estrai i nomi delle festività dalla cache per filtrare gli impegni
-    const holidayNames = (cachedAppData.italianHolidays || []).map(h => h.name.toLowerCase());
+    const holidayNames = (cachedAppData.italianHolidays || []).map(h => (h.name || '').toLowerCase());
+    const now = new Date();
 
     const commitments = (cachedBarberAppointments || [])
-        .filter(a => a.status.toLowerCase() === 'indisponibile' && 
-                      new Date(a.start) >= new Date() &&
-                      !holidayNames.includes(a.service.toLowerCase())) // Esclude le festività
-        .sort((a, b) => new Date(a.start) - new Date(b.start));
+        .filter(a => {
+            const statusLower = String(a.status || '').trim().toLowerCase();
+            const startD = new Date(a.start || a.startISO);
+            const sName = (a.service || a.clientName || '').toLowerCase();
+            return statusLower === 'indisponibile' && 
+                   !isNaN(startD.getTime()) && startD >= now &&
+                   !holidayNames.includes(sName);
+        })
+        .sort((a, b) => new Date(a.start || a.startISO) - new Date(b.start || b.startISO));
 
     const container = document.getElementById('commitments-list-container');
     if (commitments.length === 0) {
@@ -162,10 +177,22 @@ function renderPersonalCommitmentsListPage(skipPush = false) {
     let lastDate = '';
 
     commitments.forEach(c => {
-        const startDate = new Date(c.start);
-        const endDate = new Date(c.end);
-        const dateStr = startDate.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' });
-        const timeStr = `${startDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })} - ${endDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}`;
+        const startDate = new Date(c.start || c.startISO);
+        const dur = parseInt(c.duration || 60, 10);
+        const endDate = c.end ? new Date(c.end) : new Date(startDate.getTime() + dur * 60000);
+        const dateStr = !isNaN(startDate.getTime())
+            ? startDate.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })
+            : 'Data non valida';
+        const startStr = !isNaN(startDate.getTime())
+            ? startDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })
+            : '--:--';
+        const endStr = !isNaN(endDate.getTime())
+            ? endDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })
+            : '--:--';
+        const timeStr = `${startStr} - ${endStr}`;
+        const serviceName = c.service || c.clientName || 'Impegno';
+        const safeServiceName = String(serviceName).replace(/'/g, "\\'");
+        const safeId = c.id || c.bookingId || '';
 
         if (dateStr !== lastDate) {
             html += `<div style="padding: 15px 5px 5px; font-size: 0.85em; font-weight: 700; color: #555; text-transform: uppercase; letter-spacing: 0.5px;">${dateStr}</div>`;
@@ -175,13 +202,13 @@ function renderPersonalCommitmentsListPage(skipPush = false) {
         html += `
             <div class="booking-card" style="flex-direction: row; justify-content: space-between; align-items: center; padding: 10px 15px; margin-bottom: 0; border-left: 5px solid #999;">
                 <div style="display: flex; align-items: center; gap: 15px;">
-                    <div style="font-weight: 800; font-size: 1.1em; color: #1a1a1a; min-width: 50px;">${timeStr.split(' - ')[0]}</div>
+                    <div style="font-weight: 800; font-size: 1.1em; color: #1a1a1a; min-width: 50px;">${startStr}</div>
                     <div style="display: flex; flex-direction: column;">
-                        <div style="font-weight: 700; color: #333; font-size: 0.95em;">${c.service}</div>
+                        <div style="font-weight: 700; color: #333; font-size: 0.95em;">${serviceName}</div>
                         <div style="font-size: 0.8em; color: #666;">${timeStr}</div>
                     </div>
                 </div>
-                <button onclick="confirmCancelStandardAppointment('${c.id}', '${c.service}', '${dateStr} ${timeStr}', 'personal-commitments-list')" style="border:none; background:none; padding:5px; color:#dc3545; cursor:pointer; display:flex;" title="Elimina impegno">
+                <button onclick="confirmCancelStandardAppointment('${safeId}', '${safeServiceName}', '${dateStr} ${timeStr}', 'personal-commitments-list')" style="border:none; background:none; padding:5px; color:#dc3545; cursor:pointer; display:flex;" title="Elimina impegno">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                 </button>
             </div>

@@ -55,8 +55,10 @@ function renderWeeklyAppointmentsCards() {
     weekly.forEach(w => {
         const dayName = w.dayName;
         const timeStr = w.time;
-        const barberName = cachedAppData.barbers[w.barberId]?.nome || "N/D";
+        const barber = cachedAppData.barbers[w.barberId];
+        const barberName = (barber ? (barber.nome || barber.name) : '') || "N/D";
         const serviceLabel = w.service ? w.service.replace(/_/g, ' ') : "Taglio";
+        const safeClientName = String(w.clientName || '').replace(/'/g, "\\'");
 
         if (dayName.toLowerCase() !== lastDay) {
             html += `<div style="padding: 15px 5px 5px; font-size: 0.85em; font-weight: 700; color: #3498db; text-transform: uppercase; letter-spacing: 0.5px;">${dayName}</div>`;
@@ -74,7 +76,7 @@ function renderWeeklyAppointmentsCards() {
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center;">
                     <div style="font-size: 0.7em; color: #3498db; font-weight: 700; text-transform: uppercase;">Weekly</div>
-                    <button onclick="confirmRemoveWeekly('${w.id}', '${w.clientName}')" style="border:none; background:none; padding:5px; color:#dc3545; cursor:pointer; display:flex;" title="Rimuovi ricorrenza">
+                    <button onclick="confirmRemoveWeekly('${w.id}', '${safeClientName}')" style="border:none; background:none; padding:5px; color:#dc3545; cursor:pointer; display:flex;" title="Rimuovi ricorrenza">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                     </button>
                 </div>
@@ -160,36 +162,56 @@ function renderBarberWeeklyAppointmentPage(skipPush = false) {
     `;
 
     const svcContainer = document.getElementById('weekly-services-grid');
-    svcContainer.innerHTML = cachedAppData.services.map(s => `
-        <div class="service-card" onclick="selectWeeklyService(this, '${s.name}', ${s.duration})" style="background-image: url('${s.imageUrl}')">
-            <div class="service-name">${s.name.replace(/_/g, ' ')}</div>
-        </div>`).join('');
+    svcContainer.innerHTML = cachedAppData.services.map(s => {
+        const duration = s.duration || s.durationMin || 30;
+        const photo = s.imageUrl || (s.photoName ? ('./Frontend/Photo/' + s.photoName + '.jpg') : '');
+        const safeName = String(s.name || '').replace(/'/g, "\\'");
+        return `
+            <div class="service-card" onclick="selectWeeklyService(this, '${safeName}', ${duration})" style="background-image: url('${photo}')">
+                <div class="service-name">${(s.name || '').replace(/_/g, ' ')}</div>
+            </div>`;
+    }).join('');
 
     generateWeeklyDayPills();
 }
 
 function filterWeeklyClients(val) {
     const dropdown = document.getElementById('weekly-clients-dropdown');
-    if (val.length < 2) { dropdown.style.display = 'none'; return; }
+    if (!val || val.length < 2) { dropdown.style.display = 'none'; return; }
     
-    const filtered = weeklyAppState.allClients.filter(c => 
-        (c.nome + " " + c.cognome + " " + c.telefono).toLowerCase().includes(val.toLowerCase())
-    ).slice(0, 10);
+    const term = val.toLowerCase().trim();
+    const filtered = weeklyAppState.allClients.filter(c => {
+        const n = c.nome || c.name || '';
+        const s = c.cognome || c.surname || '';
+        const t = (c.telefono || c.phone || '').toString();
+        const e = (c.email || '').toString();
+        return (n + " " + s + " " + t + " " + e).toLowerCase().includes(term);
+    }).slice(0, 10);
 
     if (filtered.length === 0) { dropdown.style.display = 'none'; return; }
 
-    dropdown.innerHTML = filtered.map(c => `
-        <div style="padding: 12px; border-bottom: 1px solid #eee; cursor:pointer;" onclick="selectWeeklyClient('${c.email}', '${c.nome}', '${c.cognome}', '${c.telefono}')">
-            <strong>${c.nome} ${c.cognome}</strong><br>
-            <span style="font-size:0.8em; color:#666;">${c.telefono} - ${c.email}</span>
-        </div>
-    `).join('');
+    dropdown.innerHTML = filtered.map(c => {
+        const n = c.nome || c.name || '';
+        const s = c.cognome || c.surname || '';
+        const t = (c.telefono || c.phone || '').toString();
+        const e = (c.email || '').toString();
+        const safeN = n.replace(/'/g, "\\'");
+        const safeS = s.replace(/'/g, "\\'");
+        const safeE = e.replace(/'/g, "\\'");
+        const safeT = t.replace(/'/g, "\\'");
+        return `
+            <div style="padding: 12px; border-bottom: 1px solid #eee; cursor:pointer;" onclick="selectWeeklyClient('${safeE}', '${safeN}', '${safeS}', '${safeT}')">
+                <strong>${n} ${s}</strong><br>
+                <span style="font-size:0.8em; color:#666;">${t} - ${e}</span>
+            </div>
+        `;
+    }).join('');
     dropdown.style.display = 'flex';
 }
 
 function selectWeeklyClient(email, nome, cognome, telefono) {
-    const client = weeklyAppState.allClients.find(c => normalizePhone(c.telefono) === normalizePhone(telefono));
-    weeklyAppState.client = { email, nome, cognome, telefono, cutTime: client ? client.cutTime : 30 };
+    const client = weeklyAppState.allClients.find(c => normalizePhone(c.telefono || c.phone) === normalizePhone(telefono));
+    weeklyAppState.client = { email, nome, cognome, telefono, cutTime: client ? (client.cutTime || 30) : 30 };
     document.getElementById('weekly-client-text').innerText = `${nome} ${cognome}`;
     document.getElementById('weekly-client-badge').classList.remove('hidden');
     document.getElementById('weekly-search-container').classList.add('hidden');
@@ -308,6 +330,8 @@ function refreshWeeklySlots() {
     let html = '';
     for (const bId in cachedAppData.barbers) {
         const barber = cachedAppData.barbers[bId];
+        const bName = barber.nome || barber.name || bId;
+        const bPhoto = barber.foto || barber.photoUrl || (barber.photoName ? './Frontend/Photo/' + barber.photoName + '.jpg' : '') || '';
         
         // Identifichiamo gli intervalli occupati usando il nuovo array weeklyBookings
         const occupiedIntervals = (cachedAppData.weeklyBookings || [])
@@ -331,8 +355,8 @@ function refreshWeeklySlots() {
         html += `
             <div class="barber-col">
                 <div class="barber-info-header">
-                    <img src="${barber.foto || ''}" class="barber-photo" style="width:50px; height:50px;">
-                    <div class="barber-name-header" style="font-size:0.85em;">${barber.nome}</div>
+                    <img src="${bPhoto}" class="barber-photo" style="width:50px; height:50px;" onerror="this.src='./Frontend/Photo/default.jpg'">
+                    <div class="barber-name-header" style="font-size:0.85em;">${bName}</div>
                 </div>
                 ${slotsHtml}
             </div>`;
@@ -545,12 +569,16 @@ function confirmRemoveWeekly(bookingId, fullName) {
         
         google.script.run.withSuccessHandler(res => {
             if (res && res.status === "OK") {
-                if (res.updatedWeekly) cachedAppData.weeklyBookings = res.updatedWeekly;
+                if (res.updatedWeekly) {
+                    cachedAppData.weeklyBookings = res.updatedWeekly;
+                } else {
+                    cachedAppData.weeklyBookings = (cachedAppData.weeklyBookings || []).filter(w => w.id !== bookingId && w.bookingId !== bookingId);
+                }
                 if (res.updatedAppointments) cachedBarberAppointments = res.updatedAppointments;
                 closeAllPopupsAndRedirect(renderBarberWeeklyAppointmentsListPage, true);
             } else {
                 hideButtonSpinner(btn);
-                showCustomAlert("Errore", res.message || "Impossibile cancellare l'appuntamento.");
+                showCustomAlert("Errore", (res && res.message) ? res.message : "Impossibile cancellare l'appuntamento.");
             }
         }).removeWeeklyAppointment(bookingId);
     };

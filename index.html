@@ -31,10 +31,21 @@
     <!-- Il contenuto viene generato dinamicamente via JS -->
   </div>
 
+  <!-- Firebase SDK (deve essere primo) -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-  <script src="./Frontend/firebase-client-store.js"></script>
+
+  <!-- Moduli Store (ordine obbligatorio: init → settings → barbers → clients → bookings → email) -->
+  <script src="./Frontend/firebase-init.js"></script>
+  <script src="./Frontend/store/store-settings.js"></script>
+  <script src="./Frontend/store/store-barbers.js"></script>
+  <script src="./Frontend/store/store-clients.js"></script>
+  <script src="./Frontend/store/store-bookings.js"></script>
+  <script src="./Frontend/store/store-email.js"></script>
+
+  <!-- Bridge API -->
   <script src="./Frontend/api-bridge.js"></script>
+
   <script src="./Frontend/frontend-utils.js"></script>
   <script src="./Frontend/frontend-client/client-home.js"></script>
   <script src="./Frontend/frontend-client/client-add-appointment.js"></script>

@@ -46,9 +46,18 @@ function renderBarberClientsListPage(skipPush = false) {
         </div>
     `;
 
-    // Usa dati dalla cache globale per caricamento istantaneo
-    window.allClientsData = cachedAppData.clients || [];
-    renderClientsCards(window.allClientsData);
+    // Usa dati dalla cache globale o effettua fetch diretta se assenti
+    if (!cachedAppData || !cachedAppData.clients || cachedAppData.clients.length === 0) {
+        google.script.run.withSuccessHandler(clients => {
+            if (!cachedAppData) cachedAppData = {};
+            cachedAppData.clients = clients || [];
+            window.allClientsData = cachedAppData.clients;
+            renderClientsCards(window.allClientsData);
+        }).getClientsList();
+    } else {
+        window.allClientsData = cachedAppData.clients;
+        renderClientsCards(window.allClientsData);
+    }
 }
 
 function renderClientsCards(clients) {
@@ -62,35 +71,63 @@ function renderClientsCards(clients) {
         return;
     }
 
-    container.innerHTML = clients.map(c => `
-        <div class="booking-card" style="flex-direction: row; justify-content: space-between; align-items: center; padding: 8px 15px; margin-bottom: 0;">
-            <div>
-                <div style="font-weight: 700; color: #1a1a1a;">${c.nome} ${c.cognome}</div>
-                <div style="font-size: 0.85em; color: #666;">${c.telefono}</div>
-                <div style="font-size: 0.8em; color: #888;">${c.email.includes('@barber.it') ? 'No Email' : c.email}</div>
-                <div style="font-size: 0.8em; color: #888;">Durata Taglio: ${c.cutTime} min</div>
+    container.innerHTML = clients.map(c => {
+        const nome = c.nome || c.name || '';
+        const cognome = c.cognome || c.surname || '';
+        const tel = c.telefono || c.phone || '';
+        const email = c.email || '';
+        const cutTime = c.cutTime || 30;
+        const safeId = c.id || c.clientId || '';
+        const safeFullName = String(`${nome} ${cognome}`).replace(/'/g, "\\'");
+        const rawPhone = String(tel).replace(/\D/g, '');
+        const waLink = rawPhone ? `https://wa.me/${rawPhone}` : '#';
+        const emailDisplay = (!email || email.includes('@barber.it')) ? 'No Email' : email;
+
+        return `
+            <div class="booking-card" style="flex-direction: row; justify-content: space-between; align-items: center; padding: 8px 15px; margin-bottom: 0;">
+                <div>
+                    <div style="font-weight: 700; color: #1a1a1a;">${nome} ${cognome}</div>
+                    <div style="font-size: 0.85em; color: #666;">${tel || 'Nessun Telefono'}</div>
+                    <div style="font-size: 0.8em; color: #888;">${emailDisplay}</div>
+                    <div style="font-size: 0.8em; color: #888;">Durata Taglio: ${cutTime} min</div>
+                </div>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    ${rawPhone ? `
+                    <a href="${waLink}" target="_blank" style="color: #25D366; display: flex;" title="WhatsApp">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                    </a>
+                    ` : ''}
+                    ${tel ? `
+                    <a href="tel:${tel}" style="color: #666; display: flex;" title="Chiama">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                    </a>
+                    ` : ''}
+                    <button onclick="showEditClientPopup('${safeId}')" style="border:none; background:none; padding:0; color: #555; cursor:pointer; display:flex;" title="Modifica dati">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                    </button>
+                    <button onclick="confirmRemoveClient('${safeId}', '${safeFullName}')" style="border:none; background:none; padding:0; color:#dc3545; cursor:pointer; display:flex;" title="Elimina cliente">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                    </button>
+                </div>
             </div>
-                        <div style="display: flex; gap: 12px; align-items: center;">
-                <a href="https://wa.me/${c.telefono.toString().replace(/\D/g, '')}" target="_blank" style="color: #25D366; display: flex;"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg></a>
-                <a href="tel:${c.telefono}" style="color: #666; display: flex;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></a>
-                <button onclick="showEditClientPopup('${c.id}')" style="border:none; background:none; padding:0; color: #555; cursor:pointer; display:flex;" title="Modifica dati">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                </button>
-                <button onclick="confirmRemoveClient('${c.id}', '${c.nome} ${c.cognome}')" style="border:none; background:none; padding:0; color:#dc3545; cursor:pointer; display:flex;" title="Elimina cliente">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-                </button>
-            </div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 function showEditClientPopup(clientId) {
-    const client = window.allClientsData.find(c => c.id === clientId);
+    const client = (window.allClientsData || []).find(c => c.id === clientId || c.clientId === clientId);
     if (!client) return;
 
     const overlay = document.createElement('div');
     overlay.id = 'edit-client-overlay';
     overlay.className = 'popup-overlay';
+
+    const nome = client.nome || client.name || '';
+    const cognome = client.cognome || client.surname || '';
+    const tel = client.telefono || client.phone || '';
+    const email = client.email || '';
+    const cutTime = client.cutTime || 30;
+    const safeId = client.id || client.clientId || '';
 
     overlay.innerHTML = `
         <div class="booking-card fade-in" style="width: 90%; max-width: 450px; background: white; padding: 25px; align-items: center; text-align: center; border: none; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
@@ -98,28 +135,28 @@ function showEditClientPopup(clientId) {
             <div style="display: flex; flex-direction: column; gap: 12px; width: 100%; align-items: center;">
                 <div style="text-align: left; width: 100%;">
                     <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Nome</label>
-                    <input type="text" id="editC-Nome" value="${client.nome}" placeholder="Nome">
+                    <input type="text" id="editC-Nome" value="${nome}" placeholder="Nome">
                 </div>
                 <div style="text-align: left; width: 100%;">
                     <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Cognome</label>
-                    <input type="text" id="editC-Cognome" value="${client.cognome}" placeholder="Cognome">
+                    <input type="text" id="editC-Cognome" value="${cognome}" placeholder="Cognome">
                 </div>
                 <div style="text-align: left; width: 100%;">
                     <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Telefono</label>
-                    <input type="tel" id="editC-Phone" value="${client.telefono}" placeholder="Telefono">
+                    <input type="tel" id="editC-Phone" value="${tel}" placeholder="Telefono">
                 </div>
                 <div style="text-align: left; width: 100%;">
                     <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Email</label>
-                    <input type="email" id="editC-Email" value="${client.email.includes('@barber.it') ? '' : client.email}" placeholder="Email">
+                    <input type="email" id="editC-Email" value="${email.includes('@barber.it') ? '' : email}" placeholder="Email">
                 </div>
                 <div style="text-align: left; width: 100%;">
                     <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Durata Taglio (min)</label>
-                    <input type="number" id="editC-CutTime" value="${client.cutTime}" placeholder="Durata Taglio (min)" min="15" step="5">
+                    <input type="number" id="editC-CutTime" value="${cutTime}" placeholder="Durata Taglio (min)" min="15" step="5">
                     <p id="edit-client-error" style="color: #dc3545; text-align: center; margin-top: 5px; margin-bottom: 10px; display: none; font-size: 0.9em;"></p>
                     </div>
                 <div style="display: flex; width: 100%; margin-top: 15px;">
                     <button id="cancel-edit-client-btn" style="flex: 1; border: none; background: transparent; color: #666; font-size: 0.9em; font-weight: 600; text-transform: uppercase; cursor: pointer;">Annulla</button>
-                    <button id="saveClientBtn" onclick="saveEditedClient('${client.id}', '${client.telefono}')" style="flex: 1; background: transparent; color: #8A9A5B; border: none; font-weight: 700; text-transform: uppercase;">Salva</button>
+                    <button id="saveClientBtn" onclick="saveEditedClient('${safeId}', '${tel}')" style="flex: 1; background: transparent; color: #8A9A5B; border: none; font-weight: 700; text-transform: uppercase;">Salva</button>
                 </div>
             </div>
         </div>
@@ -133,6 +170,7 @@ function saveEditedClient(clientId, oldIdentifier) {
     const btn = document.getElementById('saveClientBtn');
     const errorEl = document.getElementById('edit-client-error');
     const updatedData = {
+        id: clientId,
         nome: capitalizeFirst(document.getElementById('editC-Nome').value),
         cognome: capitalizeFirst(document.getElementById('editC-Cognome').value),
         telefono: normalizePhone(document.getElementById('editC-Phone').value),
@@ -162,9 +200,11 @@ function saveEditedClient(clientId, oldIdentifier) {
         .withSuccessHandler((res) => {
             if (res && res.status === "OK") {
                 // Aggiorna la cache locale con i dati modificati
-                const clientIndex = cachedAppData.clients.findIndex(c => c.id === clientId);
-                if (clientIndex !== -1) {
-                    cachedAppData.clients[clientIndex] = { ...cachedAppData.clients[clientIndex], ...updatedData, id: clientId };
+                if (cachedAppData && cachedAppData.clients) {
+                    const clientIndex = cachedAppData.clients.findIndex(c => c.id === clientId || c.clientId === clientId);
+                    if (clientIndex !== -1) {
+                        cachedAppData.clients[clientIndex] = { ...cachedAppData.clients[clientIndex], ...updatedData, id: clientId };
+                    }
                 }
                 window.allClientsData = cachedAppData.clients;
                 // Chiude il popup e aggiorna la lista, confermando implicitamente il successo
@@ -211,10 +251,20 @@ function saveNewClientFromList(btn) {
 
     google.script.run.withSuccessHandler((serverUser) => {
         hideButtonSpinner(btn);
+        // Normalizziamo l'oggetto cliente
+        const normalizedClient = {
+            id: serverUser.id || serverUser.clientId || '',
+            nome: serverUser.nome || serverUser.name || capitalizeFirst(n),
+            cognome: serverUser.cognome || serverUser.surname || capitalizeFirst(c),
+            email: serverUser.email || e,
+            telefono: serverUser.telefono || serverUser.phone || t,
+            cutTime: parseInt(serverUser.cutTime || 30, 10)
+        };
         // Aggiungi il nuovo cliente alla cache locale
-        cachedAppData.clients.push(serverUser);
+        if (!cachedAppData.clients) cachedAppData.clients = [];
+        cachedAppData.clients.push(normalizedClient);
         // Ordina la cache per mantenere l'ordine alfabetico
-        cachedAppData.clients.sort((a, b) => (a.nome + " " + a.cognome).toLowerCase().localeCompare((b.nome + " " + b.cognome).toLowerCase()));
+        cachedAppData.clients.sort((a, b) => ((a.nome || '') + " " + (a.cognome || '')).toLowerCase().localeCompare(((b.nome || '') + " " + (b.cognome || '')).toLowerCase()));
         window.allClientsData = cachedAppData.clients;
 
         // Svuota i campi di input
@@ -238,9 +288,17 @@ function saveNewClientFromList(btn) {
 }
 
 function filterClientsList(val) {
-    const filtered = window.allClientsData.filter(c =>
-        (c.nome + " " + c.cognome + " " + c.telefono).toLowerCase().includes(val.toLowerCase())
-    );
+    if (!val || !val.trim()) {
+        renderClientsCards(window.allClientsData || []);
+        return;
+    }
+    const searchLower = val.trim().toLowerCase();
+    const filtered = (window.allClientsData || []).filter(c => {
+        const nome = c.nome || c.name || '';
+        const cognome = c.cognome || c.surname || '';
+        const tel = c.telefono || c.phone || '';
+        return (nome + " " + cognome + " " + tel).toLowerCase().includes(searchLower);
+    });
     renderClientsCards(filtered);
 }
 
@@ -275,7 +333,9 @@ function confirmRemoveClient(clientId, clientName) {
                 if (res && res.status === "OK") {
                     showCustomAlert("Successo", "Cliente eliminato correttamente.");
                     // Aggiorniamo i dati locali e rirenderizziamo
-                    cachedAppData.clients = cachedAppData.clients.filter(c => c.id !== clientId);
+                    if (cachedAppData && cachedAppData.clients) {
+                        cachedAppData.clients = cachedAppData.clients.filter(c => c.id !== clientId && c.clientId !== clientId);
+                    }
                     window.allClientsData = cachedAppData.clients;
                     closeAllPopupsAndRedirect(renderBarberClientsListPage, true);
                 } else {

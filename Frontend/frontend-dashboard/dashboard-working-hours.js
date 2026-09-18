@@ -9,18 +9,22 @@ let initialWorkingHoursState = null; // Stato iniziale per il controllo modifich
 function renderBarberWorkingHoursPage(skipPush = false, isSilent = false) {
     window.scrollTo(0, 0);
     if (!skipPush) pushView('working-hours');
-    const workingHours = cachedAppData.workingHours;
-    const settings = cachedAppData.settings;
-    const allBarbers = cachedAppData.allBarbers || cachedAppData.barbers;
+    const workingHours = (cachedAppData && cachedAppData.workingHours) || {};
+    const settings = (cachedAppData && cachedAppData.settings) || {};
+    const allBarbers = (cachedAppData && (cachedAppData.allBarbers || cachedAppData.barbers)) || {};
 
     // Identifichiamo il barbiere loggato (per permessi e default)
     const barberEntries = Object.entries(allBarbers);
-    const loggedInEntry = barberEntries.find(([id, b]) => b.email.toLowerCase() === userData.email.toLowerCase());
-    const loggedInBarberId = loggedInEntry ? loggedInEntry[0] : 'barber_1';
+    const loggedInEmail = (typeof userData !== 'undefined' && userData && userData.email) ? userData.email.toLowerCase().trim() : '';
+    const loggedInEntry = barberEntries.find(([id, b]) => b && b.email && b.email.toLowerCase().trim() === loggedInEmail);
+    const loggedInBarberId = loggedInEntry ? loggedInEntry[0] : (barberEntries.length > 0 ? barberEntries[0][0] : 'barber_1');
     const isOwner = loggedInBarberId === 'barber_1';
 
-    if (!currentAdminWorkingBarberId) currentAdminWorkingBarberId = loggedInBarberId;
-    const displayedBarber = allBarbers[currentAdminWorkingBarberId];
+    if (!currentAdminWorkingBarberId || !allBarbers[currentAdminWorkingBarberId]) {
+        currentAdminWorkingBarberId = loggedInBarberId;
+    }
+    const displayedBarber = allBarbers[currentAdminWorkingBarberId] || {};
+    const displayedBarberName = displayedBarber.nome || displayedBarber.name || 'Barbiere';
 
     const animClass = isSilent ? '' : 'fade-in';
 
@@ -42,12 +46,22 @@ function renderBarberWorkingHoursPage(skipPush = false, isSilent = false) {
 
                     <!-- Section Orari -->
                     <div id="admin-section-hours" class="${animClass}">
-                        <!-- Navigazione Barbiere (Solo Titolare) -->
-                        <div class="barber-display-header" style="background: white; border-radius: 20px; margin-bottom: 15px; padding: 10px 15px; border: 1px solid #eee;">
+                        <!-- Navigazione Barbiere (Solo Titolare se multipli barbieri) -->
+                        <div class="barber-display-header" style="background: white; border-radius: 20px; margin-bottom: 15px; padding: 10px 15px; border: 1px solid #eee; display: flex; align-items: center; justify-content: space-between;">
+                            ${isOwner && barberEntries.length > 1 ? `
+                            <button onclick="switchWorkingHoursBarber(-1)" style="border: none; background: none; cursor: pointer; color: #8A9A5B; padding: 5px; display: flex;" title="Barbiere precedente">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                            </button>
+                            ` : '<div></div>'}
                             <div style="text-align: center; flex: 1;">
-                                <div style="font-size: 0.7em; color: #999; text-transform: uppercase; font-weight: 700;">I tuoi orari</div>
-                                <div style="font-weight: 800; color: #1a1a1a;">${displayedBarber.nome}</div>
+                                <div style="font-size: 0.7em; color: #999; text-transform: uppercase; font-weight: 700;">${isOwner ? 'Orari Barbiere' : 'I tuoi orari'}</div>
+                                <div style="font-weight: 800; color: #1a1a1a;">${displayedBarberName}</div>
                             </div>
+                            ${isOwner && barberEntries.length > 1 ? `
+                            <button onclick="switchWorkingHoursBarber(1)" style="border: none; background: none; cursor: pointer; color: #8A9A5B; padding: 5px; display: flex;" title="Barbiere successivo">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                            </button>
+                            ` : '<div></div>'}
                         </div>
 
                         <div class="booking-card" style="padding: 15px;">
@@ -66,21 +80,21 @@ function renderBarberWorkingHoursPage(skipPush = false, isSilent = false) {
                                     <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
                                         <span style="font-size: 0.9em; font-weight: 600; color: #333;">Mostra tutti gli orari liberi</span>
                                         <label class="switch-btn">
-                                            <input type="checkbox" id="vis-all" onchange="saveAdminHours(null)" ${workingHours._visibility[0] === true || workingHours._visibility[0] === "TRUE" ? 'checked' : ''}>
+                                            <input type="checkbox" id="vis-all" onchange="saveAdminHours(null)" ${((workingHours._visibility || [])[0] === true || (workingHours._visibility || [])[0] === "TRUE") ? 'checked' : ''}>
                                             <span class="slider"></span>
                                         </label>
                                     </div>
                                     <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
                                         <span style="font-size: 0.9em; font-weight: 600; color: #333;">Solo il prossimo slot (dalle aperture)</span>
                                         <label class="switch-btn">
-                                            <input type="checkbox" id="vis-next" onchange="saveAdminHours(null)" ${workingHours._visibility[1] === true || workingHours._visibility[1] === "TRUE" ? 'checked' : ''}>
+                                            <input type="checkbox" id="vis-next" onchange="saveAdminHours(null)" ${((workingHours._visibility || [])[1] === true || (workingHours._visibility || [])[1] === "TRUE") ? 'checked' : ''}>
                                             <span class="slider"></span>
                                         </label>
                                     </div>
                                     <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
                                         <span style="font-size: 0.9em; font-weight: 600; color: #333;">Solo l'ultimo slot (dalle chiusure)</span>
                                         <label class="switch-btn">
-                                            <input type="checkbox" id="vis-preview" onchange="saveAdminHours(null)" ${workingHours._visibility[2] === true || workingHours._visibility[2] === "TRUE" ? 'checked' : ''}>
+                                            <input type="checkbox" id="vis-preview" onchange="saveAdminHours(null)" ${((workingHours._visibility || [])[2] === true || (workingHours._visibility || [])[2] === "TRUE") ? 'checked' : ''}>
                                             <span class="slider"></span>
                                         </label>
                                     </div>
@@ -151,14 +165,26 @@ function switchAdminTab(type) {
     document.getElementById('admin-section-services').classList.toggle('hidden', isH);
 }
 
+function switchWorkingHoursBarber(direction) {
+    saveAdminHours(null);
+    const allBarbers = (cachedAppData && (cachedAppData.allBarbers || cachedAppData.barbers)) || {};
+    const keys = Object.keys(allBarbers);
+    if (keys.length <= 1) return;
+    let idx = keys.indexOf(currentAdminWorkingBarberId);
+    if (idx === -1) idx = 0;
+    idx = (idx + direction + keys.length) % keys.length;
+    currentAdminWorkingBarberId = keys[idx];
+    renderBarberWorkingHoursPage(true, true);
+}
+
 function populateHoursAdmin() {
     const days = ['lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato', 'domenica'];
     const bId = currentAdminWorkingBarberId;
-    const wh = cachedAppData.workingHours[bId] || [];
+    const wh = (cachedAppData.workingHours && cachedAppData.workingHours[bId]) || [];
     
     document.getElementById('hours-table-body').innerHTML = days.map(d => {
-        // Nella nuova struttura bId è index 0, Giorno è index 1, Orari index 2-5
-        const config = wh.find(r => r[1] && r[1].toLowerCase() === d) || [bId, d, "", "", "", ""];
+        // Nella struttura Firestore bId è index 0, Giorno è index 1, Orari index 2-5
+        const config = wh.find(r => r && r[1] && r[1].toLowerCase() === d) || [bId, d, "", "", "", ""];
         return `
             <tr style="border-bottom: 1px solid #f4f4f4;">
                 <td style="padding:10px 0; font-weight:700; text-transform:capitalize;">${d.substring(0,3)}</td>
@@ -193,25 +219,33 @@ function toggleServiceActive(name, isChecked) {
 }
 
 function populateServicesAdmin() {
-    document.getElementById('admin-services-list').innerHTML = cachedAppData.services.map(s => `
+    const listContainer = document.getElementById('admin-services-list');
+    if (!listContainer) return;
+    const services = cachedAppData.services || [];
+    listContainer.innerHTML = services.map(s => {
+        const dur = s.duration || s.durationMin || 30;
+        const photo = s.imageUrl || (s.photoName ? ('./Frontend/Photo/' + s.photoName + '.jpg') : '');
+        const safeName = String(s.name || '').replace(/'/g, "\\'");
+        return `
         <div class="booking-card" style="flex-direction:row; justify-content:space-between; align-items:center; padding:15px 20px; margin-bottom:0; flex-wrap: wrap; gap: 10px;">
             <div style="display:flex; align-items:center; gap:15px; flex: 1; min-width: 200px;">
                 <label class="switch-btn">
-                    <input type="checkbox" onchange="toggleServiceActive('${s.name}', this.checked)" ${s.isActive ? 'checked' : ''}>
+                    <input type="checkbox" onchange="toggleServiceActive('${safeName}', this.checked)" ${s.isActive ? 'checked' : ''}>
                     <span class="slider"></span>
                 </label>
-                <div style="width:55px; height:55px; border-radius:10px; background-image:url('${s.imageUrl}'); background-size:cover; background-position:center; background-color:#f0f0f0; flex-shrink: 0;"></div>
-                <div style="min-width: 0;"><div style="font-weight:700; font-size:1em; word-break: break-word;">${s.name.replace(/_/g,' ')}</div><div style="font-size:0.85em; color:#666;">${s.duration} min • ${s.price || 0}€</div></div>
+                <div style="width:55px; height:55px; border-radius:10px; background-image:url('${photo}'); background-size:cover; background-position:center; background-color:#f0f0f0; flex-shrink: 0;"></div>
+                <div style="min-width: 0;"><div style="font-weight:700; font-size:1em; word-break: break-word;">${(s.name || '').replace(/_/g,' ')}</div><div style="font-size:0.85em; color:#666;">${dur} min • ${s.price || 0}€</div></div>
             </div>
             <div style="display:flex; gap:8px; flex-shrink: 0;">
-                <button onclick="showServiceEditor('${s.name}')" style="border:none; background:none; padding:5px; cursor:pointer; display:flex;" title="Modifica servizio">
+                <button onclick="showServiceEditor('${safeName}')" style="border:none; background:none; padding:5px; cursor:pointer; display:flex;" title="Modifica servizio">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                 </button>
-                <button onclick="deleteAdminService('${s.name}')" style="border:none; background:none; padding:5px; cursor:pointer; display:flex;" title="Elimina servizio">
+                <button onclick="deleteAdminService('${safeName}')" style="border:none; background:none; padding:5px; cursor:pointer; display:flex;" title="Elimina servizio">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#dc3545" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                 </button>
             </div>
-        </div>`).join('');
+        </div>`;
+    }).join('');
 }
 
 function saveAdminHours(btn = null) {
@@ -228,27 +262,41 @@ function saveAdminHours(btn = null) {
     const days = ['lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato', 'domenica'];
     const hData = days.map(d => ({
         day: d,
-        openAM: document.querySelector(`[data-d="${d}"][data-p="oA"]`).value.trim(),
-        closeAM: document.querySelector(`[data-d="${d}"][data-p="cA"]`).value.trim(),
-        openPM: document.querySelector(`[data-d="${d}"][data-p="oP"]`).value.trim(),
-        closePM: document.querySelector(`[data-d="${d}"][data-p="cP"]`).value.trim()
+        openAM: document.querySelector(`[data-d="${d}"][data-p="oA"]`)?.value.trim() || "",
+        closeAM: document.querySelector(`[data-d="${d}"][data-p="cA"]`)?.value.trim() || "",
+        openPM: document.querySelector(`[data-d="${d}"][data-p="oP"]`)?.value.trim() || "",
+        closePM: document.querySelector(`[data-d="${d}"][data-p="cP"]`)?.value.trim() || ""
     }));
+
+    const isAll = document.getElementById('vis-all')?.checked ?? true;
+    const isNext = document.getElementById('vis-next')?.checked ?? false;
+    const isPrev = document.getElementById('vis-preview')?.checked ?? false;
+
+    // Aggiornamento locale immediato in-memory per reattività istantanea
+    if (typeof cachedAppData !== 'undefined' && cachedAppData) {
+        if (!cachedAppData.workingHours) cachedAppData.workingHours = {};
+        cachedAppData.workingHours._visibility = [isAll, isNext, isPrev];
+        const bId = currentAdminWorkingBarberId || 'barber_1';
+        cachedAppData.workingHours[bId] = hData.map(h => [bId, h.day, h.openAM, h.closeAM, h.openPM, h.closePM, '', '', '']);
+    }
+
     const payload = {
         targetBarberId: currentAdminWorkingBarberId,
         workingHours: hData,
         visibility: { 
-            isAllTime: document.getElementById('vis-all').checked, 
-            isNextTime: document.getElementById('vis-next').checked, 
-            isPreviewTime: document.getElementById('vis-preview').checked 
+            isAllTime: isAll, 
+            isNextTime: isNext, 
+            isPreviewTime: isPrev 
         },
         settings: {}
     };
+
     google.script.run
     .withSuccessHandler(res => {
         if (btn) {
             btn.innerText = original; btn.disabled = false;
             if(res && res.status === "OK") showCustomAlert("Salvataggio effettuato", "Impostazioni aggiornate.", () => refreshDashboardData(true));
-            else showCustomAlert("Errore", res.message || "Errore durante il salvataggio.");
+            else showCustomAlert("Errore", (res && res.message) ? res.message : "Errore durante il salvataggio.");
         } else if(res && res.status === "OK") {
             initialWorkingHoursState = currentState; // Aggiorna lo stato di riferimento dopo il successo
             refreshDashboardData(true);
@@ -275,7 +323,7 @@ function showServiceEditor(oldName = null) {
             </div>
             <div>
                 <label class="detail-label">Durata (min)</label>
-                <input type="number" id="ed-svc-dur" value="${svc.duration}" placeholder="Es. 30">
+                <input type="number" id="ed-svc-dur" value="${svc.duration || svc.durationMin || ''}" placeholder="Es. 30">
             </div>
             <div>
                 <label class="detail-label">Prezzo (€)</label>
@@ -350,16 +398,16 @@ function deleteAdminService(name) {
 
         google.script.run
         .withSuccessHandler(res => {
-            if(res === "OK") {
+            if(res === "OK" || (res && res.status === "OK")) {
                 showCustomAlert("Eliminato", "Servizio rimosso.", () => { 
                     // Rimozione locale istantanea
-                    cachedAppData.services = cachedAppData.services.filter(s => s.name !== name);
+                    cachedAppData.services = (cachedAppData.services || []).filter(s => s.name !== name);
                     // Chiudi tutti i popup e aggiorna la lista dei servizi e la dashboard
                     closeAllPopupsAndRedirect(() => { populateServicesAdmin(); refreshDashboardData(true); });
                 });
             } else {
                 hideButtonSpinner(btn);
-                showCustomAlert("Errore", res);
+                showCustomAlert("Errore", (res && res.message) ? res.message : res);
             }
         })
         .withFailureHandler(err => {

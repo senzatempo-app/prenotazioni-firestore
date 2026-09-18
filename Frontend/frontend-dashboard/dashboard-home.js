@@ -94,9 +94,9 @@ function handleBarberPasswordSubmit() {
                     cachedAppData = data;
                     document.title = (data.settings.BUSINESS_NAME || 'Business') + " - Gestionale";
                     // Cerchiamo i dettagli completi del barbiere per aggiornare userData
-                    const barberInfo = Object.values(data.barbers).find(b => b.email.toLowerCase() === email.toLowerCase());
+                    const barberInfo = Object.values(data.barbers || {}).find(b => b.email && b.email.toLowerCase() === email.toLowerCase());
                     if (barberInfo) {
-                        userData.nome = barberInfo.nome;
+                        userData.nome = barberInfo.nome || barberInfo.name || 'Barbiere';
                         localStorage.setItem('barber_user', JSON.stringify(userData));
                     }
                     initBarberDashboard();
@@ -127,8 +127,8 @@ function initBarberDashboard() {
     }
 
     // Trova l'ID del barbiere loggato
-    const barberEntries = Object.entries(cachedAppData.barbers);
-    const foundBarber = barberEntries.find(([id, b]) => b.email.toLowerCase() === userData.email.toLowerCase());
+    const barberEntries = Object.entries(cachedAppData.barbers || {});
+    const foundBarber = barberEntries.find(([id, b]) => b && b.email && b.email.toLowerCase() === (userData.email || '').toLowerCase());
     if (foundBarber) {
         currentBarberId = foundBarber[0]; // Salva l'ID del barbiere
     } else {
@@ -149,6 +149,12 @@ function initBarberDashboard() {
     
     renderBarberDashboardPage();
     startDashboardAutoRefresh(); 
+    if (typeof directCheckAndSendReminders === 'function') {
+        directCheckAndSendReminders();
+    }
+    if (typeof directCleanupOldBookings === 'function') {
+        directCleanupOldBookings();
+    }
 }
 
 function renderBarberDashboardPage(skipPush = false, isSilent = false) {
@@ -165,17 +171,20 @@ function renderBarberDashboardPage(skipPush = false, isSilent = false) {
     const savedScrollTop = oldCalendarBody ? oldCalendarBody.scrollTop : dashboardCalendarScrollPosition;
 
     // Recupera i dati del barbiere attualmente visualizzato
-    const displayedBarber = cachedAppData.barbers[currentDisplayedBarberId];
+    const displayedBarber = (cachedAppData.barbers && cachedAppData.barbers[currentDisplayedBarberId]) || {};
+    const displayedBarberName = displayedBarber.nome || displayedBarber.name || 'Barbiere';
     // Sicurezza: controlla se barber_1 esiste prima di accedere alla mail
-    const isOwner = cachedAppData.barbers.barber_1 ? (userData.email.toLowerCase() === cachedAppData.barbers.barber_1.email.toLowerCase()) : false;
+    const isOwner = (cachedAppData.barbers && cachedAppData.barbers.barber_1 && cachedAppData.barbers.barber_1.email) 
+        ? ((userData.email || '').toLowerCase() === cachedAppData.barbers.barber_1.email.toLowerCase()) 
+        : false;
 
     const layoutClass = isCalendarExpanded ? 'dashboard-layout expanded' : 'dashboard-layout';
     const animClass = isSilent ? '' : 'fade-in';
     const headerClass = isCalendarExpanded ? `barber-display-header ${animClass} expanded` : `barber-display-header ${animClass}`;
     
-    // Calcola se ci sono richieste di cancellazione pendenti
+    // Calcola se ci sono richieste di cancellazione pendenti (case-insensitive)
     const pendingCount = cachedBarberAppointments ? 
-        cachedBarberAppointments.filter(a => a.status === 'Richiesta cancellazione').length : 0;
+        cachedBarberAppointments.filter(a => String(a.status || '').trim().toLowerCase() === 'richiesta cancellazione').length : 0;
 
     const cancelCardStyle = pendingCount > 0 
         ? "background-color: #dc3545; color: white; border: none; box-shadow: 0 4px 15px rgba(220, 53, 69, 0.4);" 
@@ -192,7 +201,7 @@ function renderBarberDashboardPage(skipPush = false, isSilent = false) {
             <div class="home-content">
                 <!-- Nome del Barbiere Visualizzato e Controlli di Cambio -->
                 <div class="${headerClass}">
-                    <h2 style="text-align: center; margin-top: 0; margin-bottom: 0;">${displayedBarber.nome}</h2>
+                    <h2 style="text-align: center; margin-top: 0; margin-bottom: 0;">${displayedBarberName}</h2>
                 </div>
 
                 <div class="${layoutClass}">
@@ -326,7 +335,8 @@ function saveDashboardScroll() {
  */
 function renderBarberCancellations() {
     window.scrollTo(0, 0);
-    const displayedBarber = cachedAppData.barbers[currentDisplayedBarberId];
+    const displayedBarber = (cachedAppData.barbers && cachedAppData.barbers[currentDisplayedBarberId]) || {};
+    const displayedBarberName = displayedBarber.nome || displayedBarber.name || 'Barbiere';
     
     appContainer.innerHTML = `
         <div id="cancellations-screen" class="full-screen">
@@ -338,7 +348,7 @@ function renderBarberCancellations() {
             </div>
             <div class="home-content">
                 <div class="booking-container">
-                    <h2 style="margin-top: 20px;">Richieste per ${displayedBarber.nome}</h2>
+                    <h2 style="margin-top: 20px;">Richieste per ${displayedBarberName}</h2>
                     <p style="text-align: center; color: #666; margin-bottom: 20px;">Qui appariranno le richieste pendenti.</p>
                     
                     <!-- Area per la lista delle richieste (da popolare con una fetch) -->
@@ -484,6 +494,12 @@ function startDashboardAutoRefresh() {
     dashboardAutoRefreshInterval = setInterval(() => {
         console.log("[Dashboard] Sync automatico (5 min)...");
         refreshDashboardData(true); // Esegue il refresh in modalità "silenziosa"
+        if (typeof directCheckAndSendReminders === 'function') {
+            directCheckAndSendReminders();
+        }
+        if (typeof directCleanupOldBookings === 'function') {
+            directCleanupOldBookings();
+        }
     }, 5 * 60 * 1000); // Portato a 5 minuti
 }
 
@@ -649,38 +665,47 @@ function renderCustomCalendar(appointments, isSilent = false, savedScrollTop = n
         }
 
         const dayAppointments = appointments.filter(app => {
+            if (!app.start) return false;
             const appDate = new Date(app.start);
-            return appDate.toDateString() === day.toDateString();
+            return !isNaN(appDate.getTime()) && appDate.toDateString() === day.toDateString();
         });
 
         dayAppointments.forEach(app => {
             const appStart = new Date(app.start);
-            const appEnd = new Date(app.end);
+            const durationMin = parseInt(app.duration, 10) || 30;
+            const appEnd = app.end ? new Date(app.end) : new Date(appStart.getTime() + durationMin * 60000);
             const startHour = appStart.getHours();
             const startMinute = appStart.getMinutes();
-            const endHour = appEnd.getHours();
-            const endMinute = appEnd.getMinutes();
+            const endHour = !isNaN(appEnd.getTime()) ? appEnd.getHours() : startHour;
+            const endMinute = !isNaN(appEnd.getTime()) ? appEnd.getMinutes() : startMinute + durationMin;
 
             // Calcolo proporzionale: 1 ora = hourHeight pixel
             const top = (startHour * hourHeight) + (startMinute * (hourHeight / 60));
-            const height = Math.max(((endHour * hourHeight) + (endMinute * (hourHeight / 60))) - top, 15); // Altezza minima
+            const calculatedHeight = ((endHour * hourHeight) + (endMinute * (hourHeight / 60))) - top;
+            const height = Math.max(!isNaN(calculatedHeight) && calculatedHeight > 0 ? calculatedHeight : (durationMin * (hourHeight / 60)), 15);
 
-            const isPendingCancel = app.status.toLowerCase() === 'richiesta cancellazione';
-            const isWeekly = app.status.toLowerCase() === 'weekly';
-            const isIndispo = app.status.toLowerCase() === 'indisponibile';
+            const statusNormalized = String(app.status || '').trim().toLowerCase();
+            const isPendingCancel = statusNormalized === 'richiesta cancellazione';
+            const isWeekly = statusNormalized === 'weekly';
+            const isIndispo = statusNormalized === 'indisponibile';
             const isPast = appStart < now;
             const statusClass = isIndispo ? 'appointment-indisponibile' : (isPendingCancel ? 'appointment-pending' : 'appointment-confirmed');
             const cancelStyle = isPendingCancel ? 'background-color: #dc3545 !important; color: white !important; border-left: 3px solid rgba(0,0,0,0.2);' : '';
             const weeklyStyle = isWeekly ? 'background-color: #3498db !important; color: white !important; border-left: 3px solid rgba(0,0,0,0.2);' : '';
+            const cancelReason = app.cancelReason || app.cancellationReason || '';
+
+            const safeClientName = String(app.clientName || '').replace(/'/g, "\\'");
+            const safeService = String(app.service || '').replace(/'/g, "\\'");
+            const safeCancelReason = String(cancelReason).replace(/'/g, "\\'");
 
             dayAppointmentsHtml += `
                 <div class="appointment-item ${statusClass} ${isPast ? 'past-appointment' : ''}" style="top: ${top}px; height: ${height}px; --appointment-height: ${height}px; ${cancelStyle} ${weeklyStyle}"
-                    onclick="showAppointmentDetailsPopup('${app.id}', '${app.clientName}', '${app.service}', '${app.start}', '${app.end}', '${app.clientPhone}', '${currentDisplayedBarberId}', '${app.status}', '${String(app.cancelReason || "").replace(/'/g, "\\'")}')">
+                    onclick="showAppointmentDetailsPopup('${app.id}', '${safeClientName}', '${safeService}', '${app.start}', '${app.end || appEnd.toISOString()}', '${app.clientPhone || ''}', '${app.barberId || currentDisplayedBarberId}', '${app.status || ''}', '${safeCancelReason}')">
                     <div class="appointment-header">
                         <span class="appointment-time">${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}</span>
-                        <span class="appointment-service">${app.service.replace(/_/g, ' ')}</span>
+                        <span class="appointment-service">${(app.service || '').replace(/_/g, ' ')}</span>
                     </div>
-                    <span class="appointment-client">${app.clientName}</span>
+                    <span class="appointment-client">${app.clientName || ''}</span>
                 </div>
             `;
         });
@@ -834,27 +859,43 @@ function addSwipeNavigation(element) {
  */
 function showAppointmentDetailsPopup(bookingId, clientName, service, startIso, endIso, clientPhone, barberId, status, cancelReason = "") {
     const initialDate = new Date(startIso);
-    const initialEndDate = new Date(endIso);
-    const duration = (new Date(endIso).getTime() - initialDate.getTime()) / 60000;
-    const isIndispo = status.toLowerCase() === 'indisponibile';
-    const isPendingCancel = status === 'Richiesta cancellazione';
+    let initialEndDate = endIso ? new Date(endIso) : null;
+    if (!initialEndDate || isNaN(initialEndDate.getTime())) {
+        initialEndDate = new Date(initialDate.getTime() + 30 * 60000);
+    }
+    const duration = Math.round((initialEndDate.getTime() - initialDate.getTime()) / 60000) || 30;
+    const statusNormalized = String(status || '').trim().toLowerCase();
+    const isIndispo = statusNormalized === 'indisponibile';
+    const isPendingCancel = statusNormalized === 'richiesta cancellazione';
+
+    // Trova email cliente da cachedAppData.clients
+    let clientEmail = 'Nessuna Email';
+    if (cachedAppData && cachedAppData.clients) {
+        const foundClient = cachedAppData.clients.find(c => {
+            if (clientPhone && (c.telefono || c.phone)) {
+                return normalizePhone(c.telefono || c.phone) === normalizePhone(clientPhone);
+            }
+            return false;
+        });
+        if (foundClient && foundClient.email) clientEmail = foundClient.email;
+    }
 
     editAppState = { // Use settings for default indispo names
         bookingId: bookingId, 
         serviceDuration: duration,
         clientPhone: clientPhone,
-        clientEmail: (cachedAppData.clients || []).find(c => normalizePhone(c.telefono) === normalizePhone(clientPhone))?.email || 'Nessuna Email',
+        clientEmail: clientEmail,
         barberId: barberId,
         isIndispo: isIndispo,
         currentDate: formatDateToItalian(initialDate.toISOString().split('T')[0]),
         currentTime: initialDate.getHours().toString().padStart(2, '0') + ":" + initialDate.getMinutes().toString().padStart(2, '0'),
         // Use settings for indispo names
-        clientName: isIndispo ? cachedAppData.settings.INDISPO_CLIENT_NAME || "IMPEGNO PERSONALE" : clientName,
-        serviceName: isIndispo ? cachedAppData.settings.INDISPO_SERVICE_NAME || "Indisponibilità" : service,
-        cancelReason: cancelReason,
+        clientName: isIndispo ? ((cachedAppData.settings && (cachedAppData.settings.INDISPO_CLIENT_NAME || cachedAppData.settings.indispoClientName)) || "IMPEGNO PERSONALE") : clientName,
+        serviceName: isIndispo ? ((cachedAppData.settings && (cachedAppData.settings.INDISPO_SERVICE_NAME || cachedAppData.settings.indispoServiceName)) || "Indisponibilità") : service,
+        cancelReason: cancelReason || '',
         allSlots: null, 
         selectedSlot: null,
-        isWeekly: status.toLowerCase() === 'weekly'
+        isWeekly: statusNormalized === 'weekly'
     };
 
     const overlay = document.createElement('div');
@@ -869,7 +910,7 @@ function showAppointmentDetailsPopup(bookingId, clientName, service, startIso, e
         <div class="appointment-detail-popup fade-in" style="max-width: 420px; position: relative;">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
                 <h3 style="margin: 0;">${isIndispo ? 'Dettagli Impegno' : 'Dettagli Appuntamento'}</h3>
-                <button onclick="confirmCancelStandardAppointment('${bookingId}', '${clientName}', '${formattedDate} ${formattedTime}')" 
+                <button onclick="confirmCancelStandardAppointment('${bookingId}', '${String(clientName).replace(/'/g, "\\'")}', '${formattedDate} ${formattedTime}')" 
                         style="border: none; background: none; color: #dc3545; padding: 5px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                 </button>

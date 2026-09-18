@@ -3,7 +3,13 @@
  * 100% DIRETTO SU FIRESTORE (< 30ms).
  * Connessione a Google Sheet / Google Apps Script Web App completamente eliminata.
  */
-const GOOGLE_SCRIPT_URL = "";
+// ─────────────────────────────────────────────────────────────
+// URL del Google Apps Script Web App per l'invio email tramite MailApp.
+// Incolla qui l'URL dopo aver deployato Backend GAS/email-sender.js su script.google.com
+// Esempio: "https://script.google.com/macros/s/AKfycby.../exec"
+// Se vuoto, il sistema usa la collection Firestore 'mail' come fallback.
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby1uHWf9lrvNduO1S11mib0kU-rzIZgHrESA5vcfuG1YG_EtzfTw3IEvAZkK2TX-dUw/exec";
+
 const APP_API_BASE = "";
 
 (function () {
@@ -28,32 +34,23 @@ const APP_API_BASE = "";
     'getWeeklyBookingsList': (args) => typeof directGetWeeklyBookingsList === 'function' ? directGetWeeklyBookingsList(...args) : null,
     'getItalianHolidaysStatus': (args) => typeof directGetItalianHolidaysStatus === 'function' ? directGetItalianHolidaysStatus(...args) : null,
 
-    // SCRITTURE DIRETTE + NOTIFICA BACKGROUND
+    // SCRITTURE DIRETTE
     'processBooking': async (args) => {
       if (typeof directProcessBooking !== 'function') return null;
-      const res = await directProcessBooking(...args);
-      // Avvia notifica email in background senza far attendere l'utente
-      triggerBackgroundEmailNotification('processBooking', args);
-      return res;
+      return await directProcessBooking(...args);
     },
     'cancelAppointment': async (args) => {
       if (typeof directCancelAppointment !== 'function') return null;
-      const res = await directCancelAppointment(...args);
-      triggerBackgroundEmailNotification('cancelAppointment', args);
-      return res;
+      return await directCancelAppointment(...args);
     },
     'requestCancellation': async (args) => {
       if (typeof directRequestCancellation !== 'function') return null;
       // args[0] è eventId/bookingId, args[1] è calendarId, args[2] è reason
-      const res = await directRequestCancellation(args[0], args[1], args[2]);
-      triggerBackgroundEmailNotification('requestCancellation', args);
-      return res;
+      return await directRequestCancellation(args[0], args[1], args[2]);
     },
     'handleCancellationDecision': async (args) => {
       if (typeof directHandleCancellationDecision !== 'function') return null;
-      const res = await directHandleCancellationDecision(args[0], args[1]);
-      triggerBackgroundEmailNotification('handleCancellationDecision', args);
-      return res;
+      return await directHandleCancellationDecision(args[0], args[1]);
     },
     'saveGlobalSettings': async (args) => {
       if (typeof directSaveGlobalSettings !== 'function') return null;
@@ -126,12 +123,12 @@ const APP_API_BASE = "";
   const ACTIONS = [
     'getAppInitData', 'getDefaultCutTime',
     'getBarbersList', 'getServices', 'manageService', 'verifyBarberPassword',
-    'getSettings', 'getWorkingHours', 'saveWorkingHoursAndSettings', 'saveGlobalSettings', 
+    'getSettings', 'getWorkingHours', 'saveWorkingHoursAndSettings', 'saveGlobalSettings',
     'getItalianHolidaysStatus', 'toggleHolidayClosure', 'manageCustomHoliday',
     'registerOrUpdateUser', 'updateClientData', 'getClientConfig', 'getClientsList', 'deleteClient',
-    'processBooking', 'getUserBookings', 'cancelAppointment', 'updateAppointment', 
-    'handleCancellationDecision', 'saveIndisponibilita', 'updateIndisponibilita', 
-    'saveIndisponibilitaRange', 'saveWeeklyAppointment', 'removeWeeklyAppointment', 
+    'processBooking', 'getUserBookings', 'cancelAppointment', 'updateAppointment',
+    'handleCancellationDecision', 'saveIndisponibilita', 'updateIndisponibilita',
+    'saveIndisponibilitaRange', 'saveWeeklyAppointment', 'removeWeeklyAppointment',
     'getWeeklyBookingsList', 'getBarberAppointments', 'requestCancellation', 'getWeeklyConflictsPreview',
     'getAvailableSlots'
   ];

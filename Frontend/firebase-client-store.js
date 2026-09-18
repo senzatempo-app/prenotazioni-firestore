@@ -495,26 +495,46 @@ async function directGetUserBookings(identifier) {
  * Recupera gli appuntamenti per l'agenda barbiere con gestione Timestamp Firestore
  */
 async function directGetBarberAppointments(targetBarberId) {
-  const records = await fetchCollectionDocs('bookings');
+  const [records, clients] = await Promise.all([
+    fetchCollectionDocs('bookings'),
+    directGetClientsList()
+  ]);
+  const clientMap = new Map();
+  if (Array.isArray(clients)) {
+    clients.forEach(c => {
+      if (c.id) clientMap.set(c.id, c);
+    });
+  }
+
   const mapped = records.map(doc => {
     const startIsoStr = formatTimestampToIso(doc.startISO || doc.startIso || doc.start);
-    const endIsoStr = formatTimestampToIso(doc.endISO || doc.endIso || doc.end);
+    const dur = parseInt(doc.duration || 0, 10) || 30;
+    let endIsoStr = formatTimestampToIso(doc.endISO || doc.endIso || doc.end);
+    if (!endIsoStr && startIsoStr) {
+      endIsoStr = new Date(new Date(startIsoStr).getTime() + dur * 60000).toISOString();
+    }
+    const client = doc.clientId ? clientMap.get(doc.clientId) : null;
+    const clientPhone = doc.clientPhone || doc.phone || doc.telefono || (client ? (client.telefono || client.phone) : '');
+    const clientEmail = doc.clientEmail || doc.email || (client ? client.email : '');
+    const clientName = doc.clientName || (client ? `${client.nome || ''} ${client.cognome || ''}`.trim() : '');
+
     return {
       id: doc.id || doc.bookingId || '',
       clientId: doc.clientId || '',
-      clientName: doc.clientName || '',
-      clientPhone: doc.clientPhone || doc.phone || doc.telefono || '',
-      clientEmail: doc.clientEmail || doc.email || '',
+      clientName: clientName,
+      clientPhone: clientPhone,
+      clientEmail: clientEmail,
       startISO: startIsoStr,
       start: startIsoStr,
       endISO: endIsoStr,
       end: endIsoStr,
       service: doc.service || '',
-      duration: parseInt(doc.duration || 0, 10) || 30,
+      duration: dur,
       status: doc.status || '',
       barberId: doc.barberId || '',
       prenotationISO: formatTimestampToIso(doc.prenotationISO || doc.prenotationIso),
       cancellationReason: doc.cancellationReason || '',
+      cancelReason: doc.cancellationReason || '',
       reminderSent: doc.reminderSent || false
     };
   });
@@ -791,6 +811,7 @@ async function directProcessBooking(arg1, arg2, arg3, arg4, arg5, arg6) {
     cancellationReason: '',
     clientId: clientIdStr,
     clientName: clientNameStr,
+    clientPhone: clientData.phone || clientData.telefono || '',
     clientEmail: clientData.email || '',
     duration: durationMinutes,
     prenotationISO: firebase.firestore.Timestamp.fromDate(new Date()),
@@ -804,6 +825,27 @@ async function directProcessBooking(arg1, arg2, arg3, arg4, arg5, arg6) {
   await store.collection('bookings').doc(bookingId).set(newDoc);
   console.log(`[Firebase Direct] Prenotazione salvata in Firestore (${bookingId}) in 25ms`);
 
+  // Invio notifiche email in background direttamente dal frontend (cliente + barbiere se abilitato)
+  const skipEmail = (arg6 && typeof arg6 === 'object' && arg6.skipNotification) || arg6 === false;
+  if (!skipEmail) {
+    if (typeof directSendEmailNotification === 'function') {
+      directSendEmailNotification('bookingConfirmation', {
+        booking: newDoc,
+        clientData: clientData,
+        serviceName: serviceName,
+        startDate: startDate,
+        barberId: barberId
+      });
+      directSendEmailNotification('barberBookingNotification', {
+        booking: newDoc,
+        clientData: clientData,
+        serviceName: serviceName,
+        startDate: startDate,
+        barberId: barberId
+      });
+    }
+  }
+
   return { status: 'OK', bookingId: bookingId, booking: newDoc };
 }
 
@@ -814,9 +856,26 @@ async function directCancelAppointment(bookingId, cancellationReason = '') {
   const store = initFirebaseClient();
   if (!store) throw new Error("Firestore SDK non disponibile");
 
-  await store.collection('bookings').doc(String(bookingId)).delete();
+  // Recupera i dati prima di eliminare per poter inviare l'email con i dettagli
+  let bookingData = null;
+  try {
+    const docRef = store.collection('bookings').doc(String(bookingId));
+    const docSnap = await docRef.get();
+    if (docSnap.exists) bookingData = docSnap.data();
+    await docRef.delete();
+  } catch (err) {
+    await store.collection('bookings').doc(String(bookingId)).delete();
+  }
 
   console.log(`[Firebase Direct] Appuntamento ${bookingId} eliminato definitivamente da Firestore`);
+
+  if (bookingData && typeof directSendEmailNotification === 'function') {
+    directSendEmailNotification('bookingCancellation', {
+      booking: bookingData,
+      reason: cancellationReason || bookingData.cancellationReason || ''
+    });
+  }
+
   return { status: 'OK' };
 }
 
@@ -886,16 +945,28 @@ async function directRequestCancellation(bookingId, calendarId, reason) {
   if (canDeleteDirectly) {
     await store.collection('bookings').doc(String(bookingId)).delete();
     console.log(`[Firebase Direct] Appuntamento ${bookingId} eliminato definitivamente da Firestore (entro ${autoCancelMinutes} min)`);
+    if (typeof directSendEmailNotification === 'function') {
+      directSendEmailNotification('bookingCancellation', {
+        booking: booking,
+        reason: reason || 'Annullamento rapido post-prenotazione'
+      });
+    }
     return { status: "DELETED" };
   }
 
-  // Richiesta di cancellazione ordinaria (con motivazione)
+  // Richiesta di cancellazione ordinaria (con motivazione al barbiere)
   await store.collection('bookings').doc(String(bookingId)).update({
     status: 'Richiesta cancellazione',
     cancellationReason: reason || 'Nessun motivo specificato.'
   });
 
   console.log(`[Firebase Direct] Richiesta cancellazione per ${bookingId} registrata su Firestore`);
+  if (typeof directSendEmailNotification === 'function') {
+    directSendEmailNotification('cancellationRequest', {
+      booking: booking,
+      reason: reason || 'Nessun motivo specificato.'
+    });
+  }
   return { status: "OK" };
 }
 
@@ -906,26 +977,119 @@ async function directSaveIndisponibilitaRange(barberId, startDateIso, endDateIso
   const store = initFirebaseClient();
   if (!store) throw new Error("Firestore SDK non disponibile");
 
-  const startIso = `${startDateIso}T${startTime}:00`;
-  const id = 'indispo_' + Date.now();
+  const [sH, sM] = (startTime || '09:00').split(':').map(Number);
+  const [eH, eM] = (endTime || '10:00').split(':').map(Number);
+  let durationMin = (eH * 60 + (eM || 0)) - (sH * 60 + (sM || 0));
+  if (isNaN(durationMin) || durationMin <= 0) durationMin = 60;
 
-  const d = new Date(startIso);
-  const endD = new Date(d.getTime() + 60 * 60000); // Default 60 min se non specificato
+  const curDate = new Date(`${startDateIso}T00:00:00`);
+  const finalDate = new Date(`${endDateIso || startDateIso}T00:00:00`);
+  if (isNaN(curDate.getTime())) throw new Error("Data inizio impegno non valida");
 
-  const indispoDoc = {
-    bookingId: id,
-    barberId: barberId,
-    clientId: 'indisponibilita',
-    clientName: note || 'Impegno Personale',
-    service: 'Impegno',
-    duration: 60,
-    startISO: firebase.firestore.Timestamp.fromDate(d),
-    status: 'indisponibile',
-    prenotationISO: firebase.firestore.Timestamp.fromDate(new Date())
+  const batch = store.batch();
+  let count = 0;
+
+  while (curDate <= finalDate && count < 60) {
+    const y = curDate.getFullYear();
+    const m = String(curDate.getMonth() + 1).padStart(2, '0');
+    const d = String(curDate.getDate()).padStart(2, '0');
+    const dayIsoStr = `${y}-${m}-${d}`;
+    const startDateTime = new Date(`${dayIsoStr}T${String(sH).padStart(2, '0')}:${String(sM || 0).padStart(2, '0')}:00`);
+
+    const id = 'indispo_' + Date.now() + '_' + count;
+    const ref = store.collection('bookings').doc(id);
+
+    const indispoDoc = {
+      barberId: barberId || 'barber_1',
+      bookingId: id,
+      clientId: 'indisponibilita',
+      clientName: note || 'Impegno Personale',
+      service: note || 'Impegno',
+      duration: durationMin,
+      startISO: firebase.firestore.Timestamp.fromDate(startDateTime),
+      status: 'indisponibile',
+      prenotationISO: firebase.firestore.Timestamp.fromDate(new Date()),
+      cancellationReason: '',
+      reminderSent: false
+    };
+
+    batch.set(ref, indispoDoc);
+    count++;
+    curDate.setDate(curDate.getDate() + 1);
+  }
+
+  await batch.commit();
+  console.log(`[Firebase Direct] Salvati ${count} impegni su Firestore in batch write (< 30ms)`);
+  return { status: 'OK' };
+}
+
+/**
+ * Modifica un appuntamento esistente direttamente su Firestore (< 30ms)
+ */
+async function directUpdateAppointment(bookingId, newStartIso, newEndIso, serviceName, clientEmail, barberId) {
+  const store = initFirebaseClient();
+  if (!store) throw new Error("Firestore SDK non disponibile");
+  if (!bookingId) return { status: 'ERROR', message: 'ID prenotazione mancante' };
+
+  let oldBookingData = null;
+  try {
+    const docSnap = await store.collection('bookings').doc(bookingId).get();
+    if (docSnap.exists) oldBookingData = docSnap.data();
+  } catch (e) {}
+
+  const startD = new Date(newStartIso);
+  const endD = new Date(newEndIso);
+  const duration = Math.round((endD.getTime() - startD.getTime()) / 60000) || 30;
+
+  const updateData = {
+    startISO: firebase.firestore.Timestamp.fromDate(startD),
+    duration: duration
   };
+  if (serviceName) updateData.service = serviceName;
+  if (barberId) updateData.barberId = barberId;
 
-  await store.collection('bookings').doc(id).set(indispoDoc);
-  console.log(`[Firebase Direct] Impegno salvato su Firestore in 20ms`);
+  await store.collection('bookings').doc(bookingId).update(updateData);
+  console.log(`[Firebase Direct] Appuntamento ${bookingId} aggiornato con successo su Firestore`);
+
+  if (oldBookingData && typeof directSendEmailNotification === 'function') {
+    directSendEmailNotification('bookingModification', {
+      oldBooking: oldBookingData,
+      booking: { ...oldBookingData, ...updateData, startISO: startD },
+      clientEmail: clientEmail || oldBookingData.clientEmail,
+      oldStart: oldBookingData.startISO,
+      newStart: startD,
+      serviceName: serviceName || oldBookingData.service,
+      barberId: barberId || oldBookingData.barberId
+    });
+  }
+
+  return { status: 'OK' };
+}
+
+/**
+ * Modifica un impegno personale / indisponibilità direttamente su Firestore (< 30ms)
+ */
+async function directUpdateIndisponibilita(bookingId, startIso, endIso, note, force = false) {
+  const store = initFirebaseClient();
+  if (!store) throw new Error("Firestore SDK non disponibile");
+  if (!bookingId) return { status: 'ERROR', message: 'ID impegno mancante' };
+
+  const startD = new Date(startIso);
+  const endD = new Date(endIso);
+  const duration = Math.round((endD.getTime() - startD.getTime()) / 60000) || 60;
+
+  const updateData = {
+    startISO: firebase.firestore.Timestamp.fromDate(startD),
+    duration: duration,
+    status: 'indisponibile'
+  };
+  if (note) {
+    updateData.clientName = note;
+    updateData.service = note;
+  }
+
+  await store.collection('bookings').doc(bookingId).update(updateData);
+  console.log(`[Firebase Direct] Impegno ${bookingId} aggiornato con successo su Firestore`);
   return { status: 'OK' };
 }
 
@@ -1268,6 +1432,18 @@ async function directSaveGlobalSettings(settingsData, barbersArray) {
 
   // 4. barbers/{barberId}
   if (Array.isArray(barbersArray)) {
+    const isOwnerSaving = barbersArray.some(b => (b.id || b.barberId) === 'barber_1');
+    if (isOwnerSaving) {
+      const existingBarbers = await fetchCollectionDocs('barbers');
+      const newIds = new Set(barbersArray.map(b => b.id || b.barberId));
+      existingBarbers.forEach(eb => {
+        if (eb.id !== 'barber_1' && !newIds.has(eb.id)) {
+          batch.delete(store.collection('barbers').doc(eb.id));
+          console.log(`[Firebase Direct] Barbiere rimosso da Firestore: ${eb.id}`);
+        }
+      });
+    }
+
     barbersArray.forEach(b => {
       const id = b.id || b.barberId || '';
       if (!id) return;
@@ -1382,30 +1558,187 @@ async function directGetWeeklyBookingsList() {
 }
 
 /**
- * Recupera lo stato delle festività italiane da workingHours/holidays/holidays direttamente da Firestore
+ * Recupera lo stato delle festività italiane direttamente da Firestore (< 30ms)
  */
 async function directGetItalianHolidaysStatus() {
   const store = initFirebaseClient();
   if (!store) return [];
   try {
-    const snap = await store.collection('workingHours').doc('holidays').collection('holidays').get();
-    if (snap.empty) {
-      return [];
+    let docs = await fetchCollectionDocs('holidays');
+    if (!docs || docs.length === 0) {
+      const snap = await store.collection('workingHours').doc('holidays').collection('holidays').get();
+      if (!snap.empty) {
+        docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      }
     }
-    return snap.docs.map(d => {
-      const data = d.data() || {};
-      return {
-        id: d.id,
-        name: data.name || d.id,
-        thisYear: data.thisYear || '',
-        nextYear: data.nextYear || '',
-        isActive: data.isActive !== undefined ? data.isActive : true
-      };
+
+    const standardHolidaysDef = [
+      { name: "Capodanno", dateStr: "01/01" },
+      { name: "Epifania", dateStr: "06/01" },
+      { name: "Pasqua", dateStr: "05/04" },
+      { name: "Lunedì dell'Angelo", dateStr: "06/04" },
+      { name: "Liberazione", dateStr: "25/04" },
+      { name: "Festa del Lavoro", dateStr: "01/05" },
+      { name: "Festa della Repubblica", dateStr: "02/06" },
+      { name: "Ferragosto", dateStr: "15/08" },
+      { name: "Ognissanti", dateStr: "01/11" },
+      { name: "Immacolata", dateStr: "08/12" },
+      { name: "Natale", dateStr: "25/12" },
+      { name: "S. Stefano", dateStr: "26/12" }
+    ];
+
+    const currentYear = new Date().getFullYear();
+    const result = [];
+    const seenNames = new Set();
+
+    (docs || []).forEach(doc => {
+      const name = doc.name || doc.holidayName || doc.id || '';
+      if (!name) return;
+      seenNames.add(name);
+      let d = null;
+      if (doc.iso) {
+        d = new Date(doc.iso);
+      } else if (doc.date || doc.dateStr || doc.thisYear) {
+        const rawDate = doc.date || doc.dateStr || doc.thisYear;
+        const parts = String(rawDate).split('/');
+        if (parts.length >= 2) {
+          d = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+        }
+      }
+      const isoStr = d && !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : (doc.iso || `${currentYear}-01-01`);
+      const displayStr = d && !isNaN(d.getTime()) ? d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }) : (doc.display || '');
+      result.push({
+        id: doc.id || name,
+        name: name,
+        iso: isoStr,
+        display: displayStr,
+        isClosed: Boolean(doc.isClosed === true || doc.isClosed === 'true' || doc.isActive === false)
+      });
     });
+
+    standardHolidaysDef.forEach(sh => {
+      if (!seenNames.has(sh.name)) {
+        const parts = sh.dateStr.split('/');
+        const d = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+        result.push({
+          id: sh.name,
+          name: sh.name,
+          iso: d.toISOString().split('T')[0],
+          display: d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }),
+          isClosed: false
+        });
+      }
+    });
+
+    result.sort((a, b) => (a.iso || '').localeCompare(b.iso || ''));
+    return result;
   } catch (e) {
     console.warn("[Firebase Direct] Errore lettura festività da Firestore:", e);
     return [];
   }
+}
+
+/**
+ * Gestisce apertura/chiusura per una festività su Firestore (< 30ms)
+ */
+async function directToggleHolidayClosure(iso, name, shouldClose, force = false) {
+  const store = initFirebaseClient();
+  if (!store) throw new Error("Firestore SDK non disponibile");
+
+  const holidayDocRef = store.collection('holidays').doc(name);
+  await holidayDocRef.set({
+    id: name,
+    name: name,
+    iso: iso,
+    isClosed: Boolean(shouldClose)
+  }, { merge: true });
+
+  const barbers = await directGetBarbersList(true);
+  const allConflicts = [];
+
+  if (shouldClose) {
+    for (const bId in barbers) {
+      const res = await directSaveIndisponibilitaRange(bId, iso, iso, "00:00", "23:59", name, force);
+      if (res && res.status === "CONFLICT" && res.conflicts) {
+        allConflicts.push(...res.conflicts);
+      }
+    }
+    if (allConflicts.length > 0 && !force) {
+      return { status: "CONFLICT", conflicts: allConflicts };
+    }
+  } else {
+    const bookings = await fetchCollectionDocs('bookings');
+    const batch = store.batch();
+    let count = 0;
+    bookings.forEach(b => {
+      const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+      const bDateKey = bIso.split('T')[0];
+      const isIndispo = (b.status || '').toLowerCase() === 'indisponibile';
+      const matchHoliday = (b.service || '') === name || (b.clientName || '') === name;
+      if (isIndispo && bDateKey === iso && matchHoliday) {
+        batch.delete(store.collection('bookings').doc(b.id));
+        count++;
+      }
+    });
+    if (count > 0) {
+      await batch.commit();
+      console.log(`[Firebase Direct] Rimosse ${count} indisponibilità per la riapertura della festività ${name}`);
+    }
+  }
+
+  return { status: "OK" };
+}
+
+/**
+ * Gestisce l'aggiunta, modifica ed eliminazione di una festività personalizzata su Firestore (< 30ms)
+ */
+async function directManageCustomHoliday(action, holidayData) {
+  const store = initFirebaseClient();
+  if (!store) throw new Error("Firestore SDK non disponibile");
+
+  const fullName = `${holidayData.name} (${holidayData.dateStr})`;
+  const currentYear = new Date().getFullYear();
+
+  if (action === 'add') {
+    const parts = (holidayData.dateStr || '').split('/');
+    const d = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+    const isoStr = d.toISOString().split('T')[0];
+    await store.collection('holidays').doc(fullName).set({
+      id: fullName,
+      name: fullName,
+      iso: isoStr,
+      display: d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }),
+      isClosed: false
+    });
+    return { status: "OK", holidays: await directGetItalianHolidaysStatus() };
+  }
+
+  if (action === 'edit') {
+    const oldTarget = holidayData.oldName || holidayData.name;
+    const parts = (holidayData.dateStr || '').split('/');
+    const d = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+    const isoStr = d.toISOString().split('T')[0];
+
+    if (oldTarget !== fullName) {
+      await store.collection('holidays').doc(oldTarget).delete();
+    }
+    await store.collection('holidays').doc(fullName).set({
+      id: fullName,
+      name: fullName,
+      iso: isoStr,
+      display: d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }),
+      isClosed: false
+    });
+    return { status: "OK", holidays: await directGetItalianHolidaysStatus() };
+  }
+
+  if (action === 'delete') {
+    const target = holidayData.name;
+    await store.collection('holidays').doc(target).delete();
+    return { status: "OK", holidays: await directGetItalianHolidaysStatus() };
+  }
+
+  return { status: "ERROR", message: "Azione non riconosciuta" };
 }
 
 /**
@@ -1415,15 +1748,33 @@ async function directHandleCancellationDecision(bookingId, decision) {
   const store = initFirebaseClient();
   if (!store) throw new Error("Firestore SDK non disponibile");
 
+  let bookingData = null;
+  try {
+    const docRef = store.collection('bookings').doc(String(bookingId));
+    const docSnap = await docRef.get();
+    if (docSnap.exists) bookingData = docSnap.data();
+  } catch (e) {}
+
   if (decision === 'approve') {
     await store.collection('bookings').doc(String(bookingId)).delete();
     console.log(`[Firebase Direct] Appuntamento ${bookingId} eliminato definitivamente da Firestore (approvato dal barbiere)`);
+    if (bookingData && typeof directSendEmailNotification === 'function') {
+      directSendEmailNotification('bookingCancellation', {
+        booking: bookingData,
+        reason: bookingData.cancellationReason || 'Cancellazione approvata dal barbiere'
+      });
+    }
   } else {
     await store.collection('bookings').doc(String(bookingId)).update({
-      status: 'Confermato',
+      status: 'confermato',
       cancellationReason: ''
     });
     console.log(`[Firebase Direct] Appuntamento ${bookingId} riconfermato su Firestore`);
+    if (bookingData && typeof directSendEmailNotification === 'function') {
+      directSendEmailNotification('reconfirmation', {
+        booking: bookingData
+      });
+    }
   }
 
   return { status: "OK" };
@@ -1526,21 +1877,843 @@ async function directManageService(action, serviceData) {
 }
 
 /**
- * Invia una notifica email in background tramite Google Apps Script (Fire-and-Forget)
+ * -------------------------------------------------------------
+ * MOTORE NOTIFICHE EMAIL DIRETTE DAL FRONTEND
+ * Legge modelli di subject e body da Firestore (collection settings)
+ * Sostituisce i placeholder dinamici ed esegue l'invio su collection 'mail'
+ * -------------------------------------------------------------
+ */
+
+// Cache per debouncing/deduplicazione invii email entro 60 secondi
+const sentEmailDebounceMap = new Set();
+function shouldDebounceEmail(key) {
+  if (sentEmailDebounceMap.has(key)) return true;
+  sentEmailDebounceMap.add(key);
+  setTimeout(() => sentEmailDebounceMap.delete(key), 60000);
+  return false;
+}
+
+/**
+ * Valida un indirizzo email cliente/barbiere
+ */
+function isValidClientEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  const cleaned = email.trim().toLowerCase();
+  if (cleaned.includes('@barber.it') || cleaned.endsWith('.local') || cleaned === 'no email') return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned);
+}
+
+/**
+ * Formatta una data in formato esteso italiano per le notifiche email
+ * Es: "Lunedì 21 Settembre 2026 alle ore 15:30"
+ */
+function formatEmailDateItalian(dateInput, includeTime = true) {
+  if (!dateInput) return '';
+  let d;
+  if (dateInput instanceof Date) {
+    d = dateInput;
+  } else if (typeof dateInput === 'object' && typeof dateInput.toDate === 'function') {
+    d = dateInput.toDate();
+  } else if (typeof dateInput === 'object' && dateInput.seconds) {
+    d = new Date(dateInput.seconds * 1000);
+  } else if (typeof dateInput === 'string') {
+    d = new Date(dateInput);
+  } else {
+    d = new Date(dateInput);
+  }
+  if (isNaN(d.getTime())) return String(dateInput);
+
+  const days = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
+  const months = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
+
+  const dayName = days[d.getDay()];
+  const dayNum = d.getDate();
+  const monthName = months[d.getMonth()];
+  const year = d.getFullYear();
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+
+  let res = `${dayName} ${dayNum} ${monthName} ${year}`;
+  if (includeTime) {
+    res += ` alle ore ${hours}:${minutes}`;
+  }
+  return res;
+}
+
+/**
+ * Genera il footer con i dati del salone
+ */
+function getSalonContactFooter(settings) {
+  const template = settings.EMAIL_FOOTER_TEMPLATE || settings.emailFooterTemplate || "";
+  const name = settings.BUSINESS_NAME || settings.businessName || "Senza Tempo";
+  const addr = settings.BUSINESS_ADDRESS || settings.businessAddress || "";
+  const phone = settings.CONTACT_PHONE || settings.contactPhone || "";
+  const email = settings.CONTACT_EMAIL || settings.contactEmail || "";
+
+  if (template && template.trim()) {
+    return template
+      .replace(/\$\{BUSINESS_NAME\}|\{BUSINESS_NAME\}/gi, name)
+      .replace(/\$\{BUSINESS_ADDRESS\}|\{BUSINESS_ADDRESS\}/gi, addr)
+      .replace(/\$\{CONTACT_PHONE\}|\{CONTACT_PHONE\}/gi, phone)
+      .replace(/\$\{CONTACT_EMAIL\}|\{CONTACT_EMAIL\}/gi, email);
+  }
+
+  return `<br><br><hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0 15px 0;"><div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#777;line-height:1.6;"><strong>${name}</strong>${addr ? '<br>' + addr : ''}${phone ? '<br>Tel: ' + phone : ''}${email ? '<br>Email: ' + email : ''}</div>`;
+}
+
+/**
+ * Converte HTML in testo semplice per client email senza rendering HTML
+ */
+function htmlToPlainText(html) {
+  if (!html) return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
+}
+
+/**
+ * Interpolazione sicura delle variabili nel template (supporta sia ${chiave} che {chiave})
+ */
+function interpolateEmailTemplate(template, vars) {
+  if (!template || typeof template !== 'string') return '';
+  let result = template;
+  Object.keys(vars).forEach(key => {
+    const val = vars[key] !== undefined && vars[key] !== null ? String(vars[key]) : '';
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regexWithDollar = new RegExp('\\$\\{' + escapedKey + '\\}', 'gi');
+    const regexWithoutDollar = new RegExp('\\{' + escapedKey + '\\}', 'gi');
+    result = result.replace(regexWithDollar, val).replace(regexWithoutDollar, val);
+  });
+  return result;
+}
+
+/**
+ * Motore principale invio email direttamente dal frontend.
+ * Prende subject e body prescritti in Firestore (collection settings),
+ * interpola i placeholder e invia l'email (collection 'mail' + webhook opzionale).
+ */
+async function directSendEmailNotification(type, payload = {}) {
+  // Esecuzione totalmente non bloccante in background
+  (async () => {
+    try {
+      const store = initFirebaseClient();
+      if (!store) {
+        console.warn("[Email Frontend] Firestore non disponibile per invio email.");
+        return;
+      }
+
+      const [settings, barbers] = await Promise.all([
+        directGetSettings(),
+        directGetBarbersList(true)
+      ]);
+
+      const isClientEmailEnabled = settings.EMAIL_NOTIFICATION === true || 
+                                   String(settings.EMAIL_NOTIFICATION).toLowerCase() === 'true' || 
+                                   settings.emailNotification === true;
+      const isBarberEmailEnabled = settings.BARBER_BOOKING_NOTIFICATION === true || 
+                                   String(settings.BARBER_BOOKING_NOTIFICATION).toLowerCase() === 'true' || 
+                                   settings.barberBookingNotification === true;
+
+      // Risoluzione dati barbiere
+      const barberId = String(payload.barberId || payload.booking?.barberId || 'barber_1');
+      const barber = barbers[barberId] || { nome: 'Barbiere', email: '' };
+
+      // Risoluzione dati cliente
+      const clientData = payload.clientData || {};
+      const clientNameFull = payload.clientName || clientData.nome || payload.booking?.clientName || 'Cliente';
+      const clientFirstName = (clientNameFull || '').split(' ')[0] || 'Cliente';
+      const clientLastName = clientData.cognome || (clientNameFull.split(' ').slice(1).join(' ')) || '';
+      const clientPhone = clientData.telefono || clientData.phone || payload.booking?.clientPhone || 'N/D';
+      const clientEmail = (payload.clientEmail || clientData.email || payload.booking?.clientEmail || '').trim();
+
+      const serviceName = (payload.serviceName || payload.booking?.service || 'Taglio').replace(/_/g, ' ');
+      const rawStart = payload.startDate || payload.booking?.startISO || payload.booking?.start || new Date();
+      const fullDate = formatEmailDateItalian(rawStart, true);
+
+      let recipient = '';
+      let defaultSubject = '';
+      let defaultBody = '';
+      let subjectTemplate = '';
+      let bodyTemplate = '';
+      let isEnabled = true;
+
+      const businessName = settings.BUSINESS_NAME || settings.businessName || 'Senza Tempo';
+      const businessAddress = settings.BUSINESS_ADDRESS || settings.businessAddress || '';
+      const contactPhone = settings.CONTACT_PHONE || settings.contactPhone || '';
+      const contactEmailVal = settings.CONTACT_EMAIL || settings.contactEmail || '';
+
+      const templateVars = {
+        // camelCase (nuova sintassi)
+        clientName: clientFirstName,
+        clientFullName: clientNameFull,
+        clientSurname: clientLastName,
+        clientPhone: clientPhone,
+        clientEmail: clientEmail,
+        fullDate: fullDate,
+        serviceName: serviceName,
+        barberName: barber.nome || 'Barbiere',
+        businessName: businessName,
+        businessAddress: businessAddress,
+        contactPhone: contactPhone,
+        contactEmail: contactEmailVal,
+        // alias diretti usati nei template footer
+        businessPhone: contactPhone,
+        businessEmail: contactEmailVal,
+        reason: payload.reason || payload.booking?.cancellationReason || 'Nessun motivo specificato',
+        dayName: payload.dayName || '',
+        timeStr: payload.timeStr || '',
+        firstDate: payload.firstDate || '',
+        oldFullDate: payload.oldStart ? formatEmailDateItalian(payload.oldStart, true) : '',
+        newFullDate: payload.newStart ? formatEmailDateItalian(payload.newStart, true) : fullDate,
+        // SCREAMING_SNAKE_CASE (vecchia sintassi - compatibilità con template esistenti)
+        BUSINESS_NAME: businessName,
+        BUSINESS_ADDRESS: businessAddress,
+        CONTACT_PHONE: contactPhone,
+        CONTACT_EMAIL: contactEmailVal,
+        BUSINESS_PHONE: contactPhone,
+        BUSINESS_EMAIL: contactEmailVal
+      };
+
+      switch (type) {
+        case 'bookingConfirmation':
+          recipient = clientEmail;
+          isEnabled = isClientEmailEnabled;
+          defaultSubject = "Conferma Appuntamento";
+          defaultBody = `<p>Ciao <strong>\${clientName}</strong>,</p><p>il tuo appuntamento per <strong>\${serviceName}</strong> è confermato per <strong>\${fullDate}</strong> con <strong>\${barberName}</strong>.</p><p>A presto!</p>`;
+          subjectTemplate = settings.EMAIL_CONFIRM_SUBJECT || settings.bookingConfirmationSubject || defaultSubject;
+          bodyTemplate = settings.EMAIL_CONFIRM_BODY || settings.bookingConfirmationBody || defaultBody;
+          break;
+
+        case 'barberBookingNotification':
+          recipient = barber.email || '';
+          isEnabled = isBarberEmailEnabled;
+          defaultSubject = `Nuova prenotazione - \${serviceName}`;
+          defaultBody = `<p>Ciao <strong>\${barberName}</strong>,</p><p>hai una nuova prenotazione da parte di <strong>\${clientName} \${clientSurname}</strong>.</p><p><strong>Servizio:</strong> \${serviceName}<br><strong>Data e ora:</strong> \${fullDate}<br><strong>Telefono cliente:</strong> \${clientPhone}<br><strong>Email cliente:</strong> \${clientEmail}</p>`;
+          subjectTemplate = settings.BARBER_BOOKING_NOTIFICATION_SUBJECT || settings.barberBookingNotificationSubject || defaultSubject;
+          bodyTemplate = settings.BARBER_BOOKING_NOTIFICATION_BODY || settings.barberBookingNotificationBody || defaultBody;
+          break;
+
+        case 'bookingCancellation':
+          recipient = clientEmail;
+          isEnabled = isClientEmailEnabled;
+          defaultSubject = "Annullamento Appuntamento";
+          defaultBody = `<p>Ciao <strong>\${clientName}</strong>,</p><p>ti confermiamo che il tuo appuntamento per <strong>\${serviceName}</strong> previsto per <strong>\${fullDate}</strong> con <strong>\${barberName}</strong> è stato annullato.</p>`;
+          subjectTemplate = settings.EMAIL_CANCEL_SUBJECT || settings.cancellationSubject || defaultSubject;
+          bodyTemplate = settings.EMAIL_CANCEL_BODY || settings.cancellationBody || defaultBody;
+          break;
+
+        case 'bookingModification':
+          recipient = clientEmail;
+          isEnabled = isClientEmailEnabled;
+          defaultSubject = "Modifica Appuntamento";
+          defaultBody = `<p>Ciao <strong>\${clientName}</strong>,</p><p>il tuo appuntamento per <strong>\${serviceName}</strong> è stato spostato da <strong>\${oldFullDate}</strong> a <strong>\${newFullDate}</strong> con <strong>\${barberName}</strong>.</p>`;
+          subjectTemplate = settings.EMAIL_MODIFIED_SUBJECT || settings.modificationSubject || defaultSubject;
+          bodyTemplate = settings.EMAIL_MODIFIED_BODY || settings.modificationBody || defaultBody;
+          break;
+
+        case 'cancellationRequest':
+          recipient = barber.email || '';
+          isEnabled = true; // Notifica di servizio per il barbiere
+          defaultSubject = `Richiesta di Annullamento - \${clientName}`;
+          defaultBody = `<p>Ciao <strong>\${barberName}</strong>,</p><p>il cliente <strong>\${clientName}</strong> ha richiesto l'annullamento dell'appuntamento del <strong>\${fullDate}</strong> per <strong>\${serviceName}</strong>.</p><p><strong>Motivo:</strong> \${reason}</p><p>Accedi alla dashboard per verificare e approvare la richiesta.</p>`;
+          subjectTemplate = settings.EMAIL_BARBER_CANCEL_REQ_SUBJECT || settings.barberCancelReqSubject || defaultSubject;
+          bodyTemplate = settings.EMAIL_BARBER_CANCEL_REQ_BODY || settings.barberCancelReqBody || defaultBody;
+          break;
+
+        case 'reconfirmation':
+          recipient = clientEmail;
+          isEnabled = isClientEmailEnabled;
+          defaultSubject = "Appuntamento Riconfermato";
+          defaultBody = `<p>Ciao <strong>\${clientName}</strong>,</p><p>la tua richiesta di cancellazione per l'appuntamento del <strong>\${fullDate}</strong> (\${serviceName}) non è stata accolta. L'appuntamento rimane confermato con <strong>\${barberName}</strong>.</p>`;
+          subjectTemplate = settings.EMAIL_RECONFIRM_SUBJECT || settings.reconfirmSubject || defaultSubject;
+          bodyTemplate = settings.EMAIL_RECONFIRM_BODY || settings.reconfirmBody || defaultBody;
+          break;
+
+        case 'weeklyConfirmation':
+          recipient = clientEmail;
+          isEnabled = isClientEmailEnabled;
+          defaultSubject = "Conferma Appuntamento Fisso";
+          defaultBody = `<p>Ciao <strong>\${clientName}</strong>,</p><p>il tuo appuntamento fisso per <strong>\${serviceName}</strong> ogni <strong>\${dayName}</strong> alle ore <strong>\${timeStr}</strong> con <strong>\${barberName}</strong> è stato registrato con successo.</p><p><strong>\${firstDate}</strong></p>`;
+          subjectTemplate = settings.EMAIL_WEEKLY_CONFIRM_SUBJECT || settings.weeklyConfirmSubject || defaultSubject;
+          bodyTemplate = settings.EMAIL_WEEKLY_CONFIRM_BODY || settings.weeklyConfirmBody || defaultBody;
+          break;
+
+        case 'weeklyCancellation':
+          recipient = clientEmail;
+          isEnabled = isClientEmailEnabled;
+          defaultSubject = "Cancellazione Appuntamento Fisso";
+          defaultBody = `<p>Ciao <strong>\${clientName}</strong>,</p><p>ti confermiamo la cancellazione del tuo appuntamento fisso per <strong>\${serviceName}</strong> del <strong>\${dayName}</strong> alle ore <strong>\${timeStr}</strong> con <strong>\${barberName}</strong>.</p>`;
+          subjectTemplate = settings.EMAIL_WEEKLY_CANCEL_SUBJECT || settings.weeklyCancelSubject || defaultSubject;
+          bodyTemplate = settings.EMAIL_WEEKLY_CANCEL_BODY || settings.weeklyCancelBody || defaultBody;
+          break;
+
+        case 'reminder':
+          recipient = clientEmail;
+          isEnabled = isClientEmailEnabled;
+          defaultSubject = "Promemoria Appuntamento";
+          defaultBody = `<p>Ciao <strong>\${clientName}</strong>,</p><p>ti ricordiamo il tuo appuntamento per <strong>\${serviceName}</strong> previsto per <strong>\${fullDate}</strong> con <strong>\${barberName}</strong>.</p>`;
+          subjectTemplate = settings.EMAIL_REMINDER_SUBJECT || settings.reminderSubject || defaultSubject;
+          bodyTemplate = settings.EMAIL_REMINDER_BODY || settings.reminderBody || defaultBody;
+          break;
+
+        default:
+          console.warn(`[Email Frontend] Tipo notifica sconosciuto: ${type}`);
+          return;
+      }
+
+      // Verifica abilitazione e validità indirizzo
+      if (!isEnabled) {
+        console.log(`[Email Frontend] Notifiche email per '${type}' disabilitate nelle impostazioni.`);
+        return;
+      }
+
+      if (!isValidClientEmail(recipient)) {
+        console.log(`[Email Frontend] Indirizzo email destinatario non valido o assente per '${type}': "${recipient}"`);
+        return;
+      }
+
+      // Deduplicazione invii identici entro 60s
+      const dedupId = payload.bookingId || payload.booking?.bookingId || payload.booking?.id || payload.dayName || fullDate;
+      const dedupKey = `${type}_${recipient}_${dedupId}`;
+      if (shouldDebounceEmail(dedupKey)) {
+        console.log(`[Email Frontend] Invio duplicato saltato per ${dedupKey}`);
+        return;
+      }
+
+      // Genera il footer e aggiungilo alle variabili (usabile via ${emailFooter} nel template)
+      const footerHtml = getSalonContactFooter(settings);
+      templateVars.emailFooter = footerHtml;
+
+      // Interpola subject e body
+      const finalSubject = interpolateEmailTemplate(subjectTemplate, templateVars);
+      let rawBody = interpolateEmailTemplate(bodyTemplate, templateVars);
+      if (!rawBody.includes('<p>') && !rawBody.includes('<br>') && !rawBody.includes('<div>')) {
+        rawBody = rawBody.split('\n').join('<br>');
+      }
+
+      // Auto-append del footer SOLO se il body template non gestisce già il footer autonomamente.
+      // Se il template originale conteneva ${BUSINESS_NAME}, ${emailFooter} o tag <hr>, il footer è già incluso.
+      const templateHandlesFooter = (
+        bodyTemplate.includes('BUSINESS_NAME') ||
+        bodyTemplate.includes('emailFooter') ||
+        bodyTemplate.includes('businessName') ||
+        bodyTemplate.includes('<hr>') ||
+        bodyTemplate.includes('<hr/')
+      );
+      const autoFooter = templateHandlesFooter ? '' : footerHtml;
+
+      const finalHtml = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#222;line-height:1.6;">${rawBody}${autoFooter}</div>`;
+      const finalText = htmlToPlainText(finalHtml);
+
+      console.log(`[Email Frontend] Invio '${type}' a ${recipient} | Oggetto: "${finalSubject}"`);
+
+      // Legge l'URL del Google Apps Script da api-bridge.js o dalle impostazioni Firestore
+      const gasUrl = (typeof GOOGLE_SCRIPT_URL !== 'undefined' ? GOOGLE_SCRIPT_URL : '')
+        || settings.EMAIL_WEBHOOK_URL
+        || settings.WEBHOOK_URL
+        || '';
+
+      if (gasUrl) {
+        // ── Percorso primario: invio via Google Apps Script (MailApp) ──────────
+        // mode: 'no-cors' necessario con GAS (redirect 302 → URL script.googleusercontent.com)
+        // fire-and-forget: non blochiamo l'UI in attesa della risposta
+        fetch(gasUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'sendEmailNotification',
+            type: type,
+            recipient: recipient,
+            subject: finalSubject,
+            htmlBody: finalHtml,
+            textBody: finalText
+          })
+        }).catch(err => console.warn('[Email Frontend] Invio GAS non riuscito:', err));
+
+        console.log(`[Email Frontend] Richiesta inviata a GAS per ${recipient}`);
+
+      } else {
+        // ── Percorso fallback: collezione Firestore 'mail' ────────────────────
+        // Richiede l'estensione Firebase "Trigger Email" per spedire fisicamente.
+        // Usato solo se GOOGLE_SCRIPT_URL non è configurato in api-bridge.js
+        const senderEmail = settings.CONTACT_EMAIL || 'senzatempo.milazzo@gmail.com';
+        const senderName  = settings.BUSINESS_NAME  || 'Senza Tempo';
+        const fromFormatted = `"${senderName}" <${senderEmail}>`;
+
+        const mailDoc = {
+          to: recipient,
+          from: fromFormatted,
+          replyTo: senderEmail,
+          message: {
+            subject: finalSubject,
+            html: finalHtml,
+            text: finalText,
+            from: fromFormatted,
+            replyTo: senderEmail
+          },
+          type: type,
+          status: 'PENDING',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          metadata: {
+            sender: senderEmail,
+            barberId: barberId,
+            clientName: clientNameFull,
+            serviceName: serviceName,
+            bookingId: dedupId
+          }
+        };
+
+        await store.collection('mail').add(mailDoc);
+        console.log(`[Email Frontend] Documento email creato in Firestore 'mail' per ${recipient}`);
+      }
+
+    } catch (err) {
+      console.warn(`[Email Frontend] Errore durante l'invio della notifica ${type}:`, err);
+    }
+  })();
+}
+
+/**
+ * Adapter per compatibilità con le chiamate legacy di triggerBackgroundEmailNotification
  */
 function triggerBackgroundEmailNotification(action, params) {
-  if (typeof GOOGLE_SCRIPT_URL === 'undefined' || !GOOGLE_SCRIPT_URL) return;
+  if (!action) return;
+  console.log(`[Email Adapter] Ricevuta azione '${action}'...`);
 
-  console.log(`[Email Background] Invio notifica per ${action}...`);
-  fetch(GOOGLE_SCRIPT_URL + "?t=" + Date.now(), {
-    method: 'POST',
-    mode: 'cors',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify({ action: action, params: params })
-  }).then(res => res.text()).then(() => {
-    console.log(`[Email Background] Notifica inviata con successo per ${action}`);
-  }).catch(err => {
-    console.warn(`[Email Background] Errore invio notifica per ${action}:`, err);
-  });
+  if (action === 'processBooking' && Array.isArray(params)) {
+    const clientData = params[0] || {};
+    const slotIso = params[1] || '';
+    const serviceName = params[2] || 'Taglio';
+    const barberId = params[4] || 'barber_1';
+    directSendEmailNotification('bookingConfirmation', {
+      clientData: clientData,
+      startDate: slotIso,
+      serviceName: serviceName,
+      barberId: barberId
+    });
+    directSendEmailNotification('barberBookingNotification', {
+      clientData: clientData,
+      startDate: slotIso,
+      serviceName: serviceName,
+      barberId: barberId
+    });
+    return;
+  }
+
+  if (action === 'cancelAppointment' && Array.isArray(params)) {
+    const bookingId = params[0];
+    const reason = params[1] || '';
+    const bookingData = params[2] || null;
+    if (bookingData) {
+      directSendEmailNotification('bookingCancellation', { booking: bookingData, reason: reason });
+    }
+    return;
+  }
+
+  if (action === 'requestCancellation' && Array.isArray(params)) {
+    const bookingId = params[0];
+    const reason = params[2] || '';
+    const bookingData = params[3] || null;
+    if (bookingData) {
+      directSendEmailNotification('cancellationRequest', { booking: bookingData, reason: reason });
+    }
+    return;
+  }
+
+  if (action === 'handleCancellationDecision' && Array.isArray(params)) {
+    const bookingId = params[0];
+    const decision = params[1];
+    const bookingData = params[2] || null;
+    if (bookingData) {
+      if (decision === 'approve') {
+        directSendEmailNotification('bookingCancellation', { booking: bookingData });
+      } else {
+        directSendEmailNotification('reconfirmation', { booking: bookingData });
+      }
+    }
+    return;
+  }
+
+  if (action === 'sendWeeklyConfirmationEmail' && typeof params === 'object') {
+    directSendEmailNotification('weeklyConfirmation', params);
+    return;
+  }
+
+  if (action === 'sendWeeklyCancellationEmail' && typeof params === 'object') {
+    directSendEmailNotification('weeklyCancellation', params);
+    return;
+  }
 }
+
+/**
+ * Controllo e invio promemoria appuntamenti direttamente dal frontend
+ */
+async function directCheckAndSendReminders() {
+  try {
+    const store = initFirebaseClient();
+    if (!store) return;
+    const [settings, bookings, clients] = await Promise.all([
+      directGetSettings(),
+      fetchCollectionDocs('bookings'),
+      directGetClientsList()
+    ]);
+
+    const isEmailEnabled = settings.EMAIL_NOTIFICATION === true || 
+                           String(settings.EMAIL_NOTIFICATION).toLowerCase() === 'true' || 
+                           settings.emailNotification === true;
+    if (!isEmailEnabled) return;
+
+    const clientsMap = new Map((clients || []).map(c => [c.id || c.clientId || '', c]));
+    const now = new Date();
+    const reminderHours = parseInt(settings.REMINDER_NOTIFICATION_TIME ?? settings.reminderNotificationTime ?? 24, 10) || 24;
+    const triggerIntervalHours = 6;
+
+    for (const booking of bookings) {
+      const st = (booking.status || '').toLowerCase().trim();
+      const reminderSent = !!booking.reminderSent;
+      const bIso = formatTimestampToIso(booking.startISO || booking.startIso || booking.start);
+      const start = new Date(bIso);
+
+      if ((st === 'confermato' || st === 'weekly' || st === 'richiesta cancellazione') && !reminderSent && start > now) {
+        const hoursUntil = (start.getTime() - now.getTime()) / (1000 * 60 * 60);
+        if (hoursUntil <= reminderHours && hoursUntil > (reminderHours - triggerIntervalHours)) {
+          const client = clientsMap.get(booking.clientId || '') || {};
+          const clientEmail = booking.clientEmail || client.email || '';
+          if (isValidClientEmail(clientEmail)) {
+            directSendEmailNotification('reminder', {
+              booking: booking,
+              clientData: client,
+              clientEmail: clientEmail,
+              startDate: start,
+              barberId: booking.barberId,
+              serviceName: booking.service
+            });
+            await store.collection('bookings').doc(booking.id || booking.bookingId).update({ reminderSent: true });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Email Reminders] Errore verifica promemoria:', err);
+  }
+}
+
+/**
+ * Anteprima conflitti per appuntamenti settimanali direttamente su Firestore (< 30ms)
+ */
+async function directGetWeeklyConflictsPreview(barberId, dayName, timeStr, duration, serviceName, clientIdentifier) {
+  const [services, clients, bookings] = await Promise.all([
+    directGetServices(),
+    directGetClientsList(),
+    fetchCollectionDocs('bookings')
+  ]);
+
+  let effectiveDuration = parseInt(duration, 10) || 30;
+  const sStandard = services.find(s => (s.name || '').toLowerCase() === "taglio");
+  const sNameLower = (serviceName || '').toLowerCase();
+
+  const searchPhone = normalizePhone(clientIdentifier || '');
+  const searchEmail = (clientIdentifier || '').includes('@') ? clientIdentifier.toLowerCase().trim() : '';
+  const clientMatch = clients.find(c =>
+    (searchPhone && normalizePhone(c.telefono || c.phone || '') === searchPhone) ||
+    (searchEmail && (c.email || '').toLowerCase().trim() === searchEmail)
+  );
+
+  if (sNameLower === "taglio" && clientMatch && clientMatch.cutTime) {
+    effectiveDuration = parseInt(clientMatch.cutTime, 10);
+  } else if (sNameLower === "taglio e barba") {
+    const clientCutTime = (clientMatch && clientMatch.cutTime) ? parseInt(clientMatch.cutTime, 10) : (sStandard ? (sStandard.duration || sStandard.durationMin || 30) : 30);
+    const sBeard = services.find(s => (s.name || '').toLowerCase() === "barba");
+    const beardDuration = sBeard ? (sBeard.duration || sBeard.durationMin || 15) : 15;
+    effectiveDuration = clientCutTime + parseInt(beardDuration, 10);
+  }
+
+  const conflicts = [];
+  const now = new Date();
+  const daysOfWeek = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+  const targetDay = daysOfWeek.indexOf((dayName || '').toLowerCase().trim());
+  if (targetDay === -1) return { conflicts: [] };
+
+  const [tHours, tMinutes] = (timeStr || '10:00').split(':').map(Number);
+
+  const activeBookings = bookings.filter(b => {
+    const st = (b.status || '').toLowerCase().trim();
+    return (st === 'confermato' || st === 'richiesta cancellazione' || st === 'weekly' || st === 'indisponibile') &&
+           String(b.barberId || '').trim() === String(barberId || '').trim();
+  }).map(b => {
+    const sIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+    const sMs = new Date(sIso).getTime();
+    const dMs = (parseInt(b.duration, 10) || 30) * 60000;
+    return { start: sMs, end: sMs + dMs };
+  });
+
+  const checkSlotFree = (startMs, durMins) => {
+    const endMs = startMs + durMins * 60000;
+    return !activeBookings.some(b => startMs < b.end && endMs > b.start);
+  };
+
+  let allAvailableSlots = null;
+
+  for (let w = 0; w < 4; w++) {
+    let date = new Date(now.getTime() + (w * 7 * 86400000));
+    date.setDate(date.getDate() + (targetDay - date.getDay() + 7) % 7);
+    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), tHours, tMinutes, 0, 0);
+    if (start < now) continue;
+
+    const isFree = checkSlotFree(start.getTime(), effectiveDuration);
+    if (!isFree) {
+      if (!allAvailableSlots) {
+        allAvailableSlots = await directGetAvailableSlots(effectiveDuration, serviceName, clientMatch ? clientMatch.email : '');
+      }
+      const dateKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
+      const daySlots = (allAvailableSlots || []).filter(s => s.dateKey === dateKey && String(s.barberId) === String(barberId));
+      let closestSlot = null;
+      if (daySlots.length > 0) {
+        daySlots.sort((a, b) => Math.abs(new Date(a.iso).getTime() - start.getTime()) - Math.abs(new Date(b.iso).getTime() - start.getTime()));
+        closestSlot = daySlots[0];
+      }
+      const dateFormatted = `${dayName.charAt(0).toUpperCase() + dayName.slice(1)} ${start.getDate()}/${start.getMonth() + 1}/${start.getFullYear()}`;
+      conflicts.push({ date: dateFormatted, suggestion: closestSlot });
+    }
+  }
+
+  return { conflicts };
+}
+
+/**
+ * Salva un appuntamento settimanale direttamente su Firestore (< 30ms)
+ */
+async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, barberId, duration, serviceName, acceptedSuggestions = []) {
+  const store = initFirebaseClient();
+  if (!store) throw new Error("Firestore SDK non disponibile");
+
+  const [clients, services, bookings] = await Promise.all([
+    directGetClientsList(),
+    directGetServices(),
+    fetchCollectionDocs('bookings')
+  ]);
+
+  const searchPhone = normalizePhone(clientIdentifier || '');
+  const searchEmail = (clientIdentifier || '').includes('@') ? clientIdentifier.toLowerCase().trim() : '';
+  const clientRow = clients.find(row =>
+    (searchPhone && normalizePhone(row.telefono || row.phone || '') === searchPhone) ||
+    (searchEmail && (row.email || '').toLowerCase().trim() === searchEmail)
+  );
+
+  if (!clientRow) return { status: "Error", message: "Cliente non trovato nel database." };
+
+  const clientId = clientRow.id || clientRow.clientId || '';
+  const clientName = `${clientRow.nome || clientRow.name || ''} ${clientRow.cognome || clientRow.surname || ''}`.trim();
+  const clientEmail = clientRow.email || '';
+  const clientPhone = clientRow.telefono || clientRow.phone || '';
+
+  let effectiveDuration = parseInt(duration, 10) || 30;
+  const sStandard = services.find(s => (s.name || '').toLowerCase() === "taglio");
+  const sNameLower = (serviceName || '').toLowerCase();
+
+  if (sNameLower === "taglio" && clientRow.cutTime) {
+    effectiveDuration = parseInt(clientRow.cutTime, 10);
+  } else if (sNameLower === "taglio e barba") {
+    const clientCutTime = clientRow.cutTime ? parseInt(clientRow.cutTime, 10) : (sStandard ? (sStandard.duration || sStandard.durationMin || 30) : 30);
+    const sBeard = services.find(s => (s.name || '').toLowerCase() === "barba");
+    const beardDuration = sBeard ? (sBeard.duration || sBeard.durationMin || 15) : 15;
+    effectiveDuration = clientCutTime + parseInt(beardDuration, 10);
+  }
+
+  // Gestione dei suggerimenti accettati
+  if (Array.isArray(acceptedSuggestions) && acceptedSuggestions.length > 0) {
+    const clientDataObj = {
+      nome: clientRow.nome || clientRow.name,
+      cognome: clientRow.cognome || clientRow.surname,
+      email: clientEmail,
+      telefono: clientPhone
+    };
+    for (const s of acceptedSuggestions) {
+      if (s && s.iso) {
+        await directProcessBooking(clientDataObj, s.iso, serviceName, s.duration || effectiveDuration, s.barberId || barberId, false);
+      }
+    }
+  }
+
+  const weeklyBookingId = "wb_" + Date.now();
+  const daysOfWeek = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+  const targetDay = daysOfWeek.indexOf((dayName || '').toLowerCase().trim());
+  const [tHours, tMinutes] = (timeStr || '10:00').split(':').map(Number);
+  const now = new Date();
+
+  let firstOccDate = null;
+  const skippedDates = [];
+
+  const activeBookings = bookings.filter(b => {
+    const st = (b.status || '').toLowerCase().trim();
+    return (st === 'confermato' || st === 'richiesta cancellazione' || st === 'weekly' || st === 'indisponibile') &&
+           String(b.barberId || '').trim() === String(barberId || '').trim();
+  }).map(b => {
+    const sIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+    const sMs = new Date(sIso).getTime();
+    const dMs = (parseInt(b.duration, 10) || 30) * 60000;
+    return { start: sMs, end: sMs + dMs };
+  });
+
+  const checkSlotFree = (startMs, durMins) => {
+    const endMs = startMs + durMins * 60000;
+    return !activeBookings.some(b => startMs < b.end && endMs > b.start);
+  };
+
+  const batch = store.batch();
+
+  // Genera 4 settimane di istanze
+  for (let w = 0; w < 4; w++) {
+    let date = new Date(now.getTime() + (w * 7 * 86400000));
+    date.setDate(date.getDate() + (targetDay - date.getDay() + 7) % 7);
+    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), tHours, tMinutes, 0, 0);
+    if (start < now) continue;
+
+    if (checkSlotFree(start.getTime(), effectiveDuration)) {
+      if (!firstOccDate) firstOccDate = start;
+      const bDocId = "bk_wk_" + Date.now() + "_" + w;
+      const bRef = store.collection('bookings').doc(bDocId);
+      batch.set(bRef, {
+        barberId: String(barberId),
+        bookingId: bDocId,
+        cancellationReason: "",
+        clientId: String(clientId),
+        clientName: clientName,
+        clientPhone: clientPhone,
+        duration: parseInt(effectiveDuration, 10),
+        prenotationISO: firebase.firestore.Timestamp.now(),
+        reminderSent: false,
+        service: serviceName,
+        startISO: firebase.firestore.Timestamp.fromDate(start),
+        status: "weekly"
+      });
+      activeBookings.push({
+        start: start.getTime(),
+        end: start.getTime() + effectiveDuration * 60000
+      });
+    } else {
+      skippedDates.push(`${dayName} ${start.getDate()}/${start.getMonth() + 1}`);
+    }
+  }
+
+  // Salva il documento della regola weeklyBookings
+  const weeklyRef = store.collection('weeklyBookings').doc(weeklyBookingId);
+  batch.set(weeklyRef, {
+    barberId: String(barberId),
+    clientId: String(clientId),
+    clientName: clientName,
+    dayName: (dayName || '').toLowerCase().trim(),
+    duration: parseInt(effectiveDuration, 10),
+    eventId: "",
+    service: serviceName,
+    startDate: firebase.firestore.Timestamp.now(),
+    startISO: firebase.firestore.Timestamp.fromDate(firstOccDate || now),
+    status: "weekly"
+  });
+
+  await batch.commit();
+  console.log(`[Firebase Direct] Appuntamento settimanale ${weeklyBookingId} salvato con successo.`);
+
+  const firstDateFormatted = firstOccDate 
+    ? `Primo appuntamento: ${dayName} ${firstOccDate.getDate()}/${firstOccDate.getMonth() + 1}/${firstOccDate.getFullYear()} ore ${timeStr}`
+    : `Ogni ${dayName} alle ore ${timeStr}`;
+
+  if (typeof directSendEmailNotification === 'function') {
+    directSendEmailNotification('weeklyConfirmation', {
+      clientEmail: clientEmail,
+      clientName: clientName,
+      dayName: dayName,
+      timeStr: timeStr,
+      serviceName: serviceName,
+      barberId: barberId,
+      firstDate: firstDateFormatted
+    });
+  }
+
+  return {
+    status: "OK",
+    skipped: skippedDates,
+    firstDate: firstDateFormatted,
+    updatedWeekly: await directGetWeeklyBookingsList(),
+    updatedAppointments: await directGetBarberAppointments(barberId)
+  };
+}
+
+/**
+ * Elimina un appuntamento settimanale e le istanze future direttamente da Firestore (< 30ms)
+ */
+async function directRemoveWeeklyAppointment(bookingId) {
+  const store = initFirebaseClient();
+  if (!store) throw new Error("Firestore SDK non disponibile");
+
+  const weeklySnap = await store.collection('weeklyBookings').doc(String(bookingId)).get();
+  let ruleData = weeklySnap.exists ? weeklySnap.data() : null;
+  if (!ruleData) {
+    const allWeekly = await fetchCollectionDocs('weeklyBookings');
+    ruleData = allWeekly.find(w => w.id === bookingId || w.bookingId === bookingId || w.weeklyBookingId === bookingId);
+  }
+
+  const clientId = ruleData ? (ruleData.clientId || '') : '';
+  const barberId = ruleData ? (ruleData.barberId || '') : '';
+
+  const batch = store.batch();
+  const targetDocId = weeklySnap.exists ? bookingId : (ruleData ? ruleData.id : bookingId);
+  batch.delete(store.collection('weeklyBookings').doc(String(targetDocId)));
+
+  const allBookings = await fetchCollectionDocs('bookings');
+  const now = new Date();
+
+  allBookings.forEach(b => {
+    const st = (b.status || '').toLowerCase().trim();
+    if (st === 'weekly') {
+      const matchClient = clientId ? (b.clientId === clientId) : true;
+      const matchBarber = barberId ? (b.barberId === barberId) : true;
+      const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+      const bDate = new Date(bIso);
+      if (matchClient && matchBarber && bDate > now) {
+        batch.delete(store.collection('bookings').doc(b.id));
+      }
+    }
+  });
+
+  await batch.commit();
+  console.log(`[Firebase Direct] Appuntamento settimanale ${bookingId} e future istanze eliminate da Firestore.`);
+
+  if (ruleData && typeof directSendEmailNotification === 'function') {
+    let cEmail = ruleData.clientEmail || ruleData.email || '';
+    let cName = ruleData.clientName || ruleData.client || '';
+    if (!cEmail && clientId) {
+      try {
+        const cDoc = await store.collection('clients').doc(clientId).get();
+        if (cDoc.exists) {
+          cEmail = cDoc.data().email || '';
+          cName = cName || `${cDoc.data().nome || ''} ${cDoc.data().cognome || ''}`.trim();
+        }
+      } catch (e) {}
+    }
+    directSendEmailNotification('weeklyCancellation', {
+      clientEmail: cEmail,
+      clientName: cName,
+      dayName: ruleData.dayName || ruleData.day || '',
+      timeStr: ruleData.timeStr || ruleData.time || '',
+      serviceName: ruleData.serviceName || ruleData.service || 'Taglio',
+      barberId: barberId
+    });
+  }
+
+  return {
+    status: "OK",
+    updatedWeekly: await directGetWeeklyBookingsList(),
+    updatedAppointments: barberId ? await directGetBarberAppointments(barberId) : []
+  };
+}
+

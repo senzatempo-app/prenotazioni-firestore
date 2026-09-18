@@ -99,9 +99,14 @@ function renderBarberAddAppointmentPage(skipPush = false) {
 
     // Inizializza Servizi
     const svcContainer = document.getElementById('add-services-grid');
-    svcContainer.innerHTML = cachedAppData.services.map(s => {
-        const formattedName = s.name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-        return `<div class="service-card" onclick="selectServiceForAdd(this, '${s.name}', ${s.duration})" style="background-image: url('${s.imageUrl}')">
+    const servicesList = (typeof cachedAppData !== 'undefined' && cachedAppData && cachedAppData.services) ? cachedAppData.services : [];
+    svcContainer.innerHTML = servicesList.map(s => {
+        const rawName = s.name || s.nome || 'Servizio';
+        const formattedName = rawName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        const safeName = rawName.replace(/'/g, "\\'");
+        const duration = parseInt(s.duration || s.durationMin || 30, 10) || 30;
+        const img = s.imageUrl || (typeof resolveLocalPhotoUrl === 'function' ? resolveLocalPhotoUrl(s.photoName, rawName, false) : `./Frontend/Photo/${rawName}.jpg`);
+        return `<div class="service-card" onclick="selectServiceForAdd(this, '${safeName}', ${duration})" style="background-image: url('${img}')">
                     <div class="service-name">${formattedName}</div>
                 </div>`;
     }).join('');
@@ -115,20 +120,34 @@ function renderBarberAddAppointmentPage(skipPush = false) {
  */
 function filterDashboardClients(val) {
     const dropdown = document.getElementById('clients-dropdown');
-    if (val.length < 2) { dropdown.style.display = 'none'; return; }
+    if (!val || val.trim().length < 2) { dropdown.style.display = 'none'; return; }
     
-    const filtered = addAppState.allClients.filter(c => 
-        (c.nome + " " + c.cognome + " " + c.telefono).toLowerCase().includes(val.toLowerCase())
-    ).slice(0, 10);
+    const searchLower = val.trim().toLowerCase();
+    const filtered = (addAppState.allClients || []).filter(c => {
+        const nome = c.nome || c.name || '';
+        const cognome = c.cognome || c.surname || '';
+        const tel = c.telefono || c.phone || '';
+        return (nome + " " + cognome + " " + tel).toLowerCase().includes(searchLower);
+    }).slice(0, 10);
 
     if (filtered.length === 0) { dropdown.style.display = 'none'; return; }
 
-    dropdown.innerHTML = filtered.map(c => `
-        <div style="padding: 12px; border-bottom: 1px solid #eee; cursor:pointer;" onclick="selectExistingClient('${c.email}', '${c.nome}', '${c.cognome}', '${c.telefono}')">
-            <strong>${c.nome} ${c.cognome}</strong><br>
-            <span style="font-size:0.8em; color:#666;">${c.telefono} - ${c.email}</span>
-        </div>
-    `).join('');
+    dropdown.innerHTML = filtered.map(c => {
+        const nome = c.nome || c.name || '';
+        const cognome = c.cognome || c.surname || '';
+        const tel = c.telefono || c.phone || '';
+        const email = c.email || '';
+        const safeNome = String(nome).replace(/'/g, "\\'");
+        const safeCognome = String(cognome).replace(/'/g, "\\'");
+        const safeTel = String(tel).replace(/'/g, "\\'");
+        const safeEmail = String(email).replace(/'/g, "\\'");
+        return `
+            <div style="padding: 12px; border-bottom: 1px solid #eee; cursor:pointer;" onclick="selectExistingClient('${safeEmail}', '${safeNome}', '${safeCognome}', '${safeTel}')">
+                <strong>${nome} ${cognome}</strong><br>
+                <span style="font-size:0.8em; color:#666;">${tel}${email ? ' - ' + email : ''}</span>
+            </div>
+        `;
+    }).join('');
     dropdown.style.display = 'flex';
 }
 
@@ -212,9 +231,17 @@ function confirmNewClientData(btn) {
     google.script.run
         .withSuccessHandler(serverUser => {
             hideButtonSpinner(btn);
+            // Normalizziamo l'oggetto cliente ricevuto dal server
+            const normalizedClient = {
+                id: serverUser.id || serverUser.clientId || '',
+                nome: serverUser.nome || serverUser.name || clientData.nome,
+                cognome: serverUser.cognome || serverUser.surname || clientData.cognome,
+                email: serverUser.email || clientData.email,
+                telefono: serverUser.telefono || serverUser.phone || clientData.telefono
+            };
             // Aggiungi il nuovo cliente alla cache locale per la ricerca futura
-            addAppState.allClients.push(serverUser);
-            selectExistingClient(serverUser.email, serverUser.nome, serverUser.cognome, serverUser.telefono);
+            addAppState.allClients.push(normalizedClient);
+            selectExistingClient(normalizedClient.email, normalizedClient.nome, normalizedClient.cognome, normalizedClient.telefono);
             // Svuota i campi dopo il successo
             document.getElementById('newC-nome').value = '';
             document.getElementById('newC-cognome').value = '';
@@ -310,6 +337,7 @@ function refreshSlotsForAdd() {
         container.innerHTML = '<div class="spinner" style="margin: 50px auto;"></div>';
     }
 
+    const clientEmail = (addAppState.client && addAppState.client.email) ? addAppState.client.email : '';
     // Effettua una chiamata al backend per ottenere gli slot disponibili
     google.script.run
         .withSuccessHandler(res => {
@@ -325,7 +353,7 @@ function refreshSlotsForAdd() {
                 container.innerHTML = `<p style="text-align:center; color:#dc3545;">Errore caricamento orari: ${err}</p>`;
             }
         })
-        .getAvailableSlots(addAppState.service.duration, addAppState.service.name, addAppState.client.email); // Non passiamo il giorno, vogliamo tutti gli slot
+        .getAvailableSlots(addAppState.service.duration, addAppState.service.name, clientEmail); // Non passiamo il giorno, vogliamo tutti gli slot
 }
 
 function renderBarberColumnsForAdd() {
@@ -481,13 +509,15 @@ function handleDashboardFinalBooking() {
       .withSuccessHandler((res) => {
         if (res && res.status === "OK") {
           refreshDashboardData(true); // Aggiorna tutto in background mentre l'utente legge
+          const cNome = addAppState.client.nome || addAppState.client.name || '';
+          const cCognome = addAppState.client.cognome || addAppState.client.surname || '';
           appContainer.innerHTML = `
             <div class="success-container">
               <div style="margin-bottom: 20px; color: #8A9A5B;">
                 <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
               </div>
               <h2 style="margin-bottom: 20px;">Appuntamento Inserito!</h2>
-              <p style="margin-bottom: 10px;">Per: ${addAppState.client.nome} ${addAppState.client.cognome}</p>
+              <p style="margin-bottom: 10px;">Per: ${cNome} ${cCognome}</p>
               <p style="margin-bottom: 2px;">${addAppState.slot.formatted}</p>
               <p style="margin-bottom: 2px;">Ore ${addAppState.slot.time}</p>
               <p style="font-size: 0.9em; color: #666; margin-bottom: 10px;">Barbiere: ${addAppState.slot.barberName}</p>

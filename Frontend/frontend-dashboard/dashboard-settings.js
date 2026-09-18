@@ -6,8 +6,16 @@ let initialSettingsState = null; // Stato iniziale per il controllo modifiche
 /**
  * Helper per creare il blocco HTML di un barbiere con etichette descrittive
  */
-window.createBarberBlockHtml = function(id, b) {
+window.createBarberBlockHtml = function(id, b = {}) {
     const isFirst = id === 'barber_1';
+    const bNome = b.nome || b.name || '';
+    const bCal = b.calendarId || '';
+    const bEmail = b.email || '';
+    const bPhone = b.telefono || b.phone || '';
+    const bPhoto = b.photoName || (b.foto && !b.foto.includes('://') ? b.foto : '') || '';
+    const bPass = b.password || '';
+    const isAct = (b.isActive === true || b.isActive === "TRUE" || b.isActive === undefined);
+
     return `
         <div class="settings-barber-block" data-id="${id}" style="border: 1px solid #eee; padding: 15px; border-radius: 15px; background: #fafafa; position: relative;">
             ${!isFirst ? `
@@ -19,32 +27,32 @@ window.createBarberBlockHtml = function(id, b) {
             <div style="display: flex; flex-direction: column; gap: 12px;">
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Nome</label>
-                    <input type="text" class="barber-inp" data-id="${id}" data-f="nome" value="${b.nome || ''}" placeholder="Nome del barbiere">
+                    <input type="text" class="barber-inp" data-id="${id}" data-f="nome" value="${bNome}" placeholder="Nome del barbiere">
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">ID Calendario / Link</label>
-                    <input type="text" class="barber-inp" data-id="${id}" data-f="calendarId" value="${b.calendarId || 'primary'}" placeholder="Indirizzo email o link del calendario">
+                    <input type="text" class="barber-inp" data-id="${id}" data-f="calendarId" value="${bCal}" placeholder="Indirizzo email o link del calendario">
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Email di Login</label>
-                    <input type="email" class="barber-inp" data-id="${id}" data-f="email" value="${b.email || ''}" placeholder="email@esempio.com">
+                    <input type="email" class="barber-inp" data-id="${id}" data-f="email" value="${bEmail}" placeholder="email@esempio.com">
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Telefono</label>
-                    <input type="tel" class="barber-inp" data-id="${id}" data-f="telefono" value="${b.telefono || ''}" placeholder="Numero di telefono">
+                    <input type="tel" class="barber-inp" data-id="${id}" data-f="telefono" value="${bPhone}" placeholder="Numero di telefono">
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Foto Profilo (cartella Photo)</label>
-                    <input type="text" class="barber-inp" data-id="${id}" data-f="foto" value="${b.photoName || b.foto || ''}" placeholder="Es. barber_1 (o lascia vuoto)">
+                    <input type="text" class="barber-inp" data-id="${id}" data-f="foto" value="${bPhoto}" placeholder="Es. barber_1 (o lascia vuoto)">
                 </div>
                 <div style="text-align: left;">
                     <label style="font-size: 0.7em; font-weight: 700; color: #999; text-transform: uppercase; margin-bottom: 2px; display: block;">Password Dashboard</label>
-                    <input type="text" class="barber-inp" data-id="${id}" data-f="password" value="${b.password || ''}" placeholder="Password di accesso">
+                    <input type="text" class="barber-inp" data-id="${id}" data-f="password" value="${bPass}" placeholder="Password di accesso">
                 </div>
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #f0f0f0;">
                     <span style="font-size: 0.9em; font-weight: 600; color: #333;">Barbiere Attivo</span>
                     <label class="switch-btn">
-                        <input type="checkbox" class="barber-inp-check" data-id="${id}" ${(b.isActive === true || b.isActive === "TRUE") ? 'checked' : ''}>
+                        <input type="checkbox" class="barber-inp-check" data-id="${id}" ${isAct ? 'checked' : ''}>
                         <span class="slider"></span>
                     </label>
                 </div>
@@ -56,7 +64,7 @@ window.createBarberBlockHtml = function(id, b) {
 window.addNewBarberBlock = function() {
     const list = document.getElementById('settings-barbers-list');
     const newId = "barber_" + Date.now();
-    const html = createBarberBlockHtml(newId, { nome: "", calendarId: "primary", email: "", telefono: "", foto: "", password: "", isActive: true });
+    const html = createBarberBlockHtml(newId, { nome: "", calendarId: "", email: "", telefono: "", foto: "", password: "", isActive: true });
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
     list.appendChild(tempDiv.firstElementChild);
@@ -66,13 +74,14 @@ window.addNewBarberBlock = function() {
 function renderBarberSettingsPage(skipPush = false, isSilent = false) {
     window.scrollTo(0, 0);
     if (!skipPush) pushView('settings');
-    const settings = cachedAppData.settings;
-    const allBarbers = cachedAppData.allBarbers || cachedAppData.barbers;
+    const settings = (cachedAppData && cachedAppData.settings) || {};
+    const allBarbers = (cachedAppData && (cachedAppData.allBarbers || cachedAppData.barbers)) || {};
     
-    // Identifichiamo il barbiere loggato
+    // Identifichiamo il barbiere loggato con controlli sicuri
     const barberEntries = Object.entries(allBarbers);
-    const loggedInEntry = barberEntries.find(([id, b]) => b.email.toLowerCase() === userData.email.toLowerCase());
-    const currentBarberId = loggedInEntry ? loggedInEntry[0] : null;
+    const loggedInEmail = (typeof userData !== 'undefined' && userData && userData.email) ? userData.email.toLowerCase().trim() : '';
+    const loggedInEntry = barberEntries.find(([id, b]) => b && b.email && b.email.toLowerCase().trim() === loggedInEmail);
+    const currentBarberId = loggedInEntry ? loggedInEntry[0] : (barberEntries.length > 0 ? barberEntries[0][0] : 'barber_1');
     const isOwner = currentBarberId === 'barber_1';
 
     const animClass = isSilent ? '' : 'fade-in';
@@ -94,19 +103,19 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                         <div style="display: flex; flex-direction: column; gap: 12px; width: 100%;">
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Nome dell'attività</label>
-                                <input type="text" id="set-BUSINESS_NAME" value="${settings.BUSINESS_NAME || ''}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
+                                <input type="text" id="set-BUSINESS_NAME" value="${settings.BUSINESS_NAME || settings.businessName || ''}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div> 
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Indirizzo</label>
-                                <input type="text" id="set-BUSINESS_ADDRESS" value="${settings.BUSINESS_ADDRESS || ''}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
+                                <input type="text" id="set-BUSINESS_ADDRESS" value="${settings.BUSINESS_ADDRESS || settings.businessAddress || ''}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div>
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Telefono</label>
-                                <input type="tel" id="set-CONTACT_PHONE" value="${settings.CONTACT_PHONE || ''}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
+                                <input type="tel" id="set-CONTACT_PHONE" value="${settings.CONTACT_PHONE || settings.businessPhone || settings.contactPhone || ''}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
                             </div>
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Email per contatti e notifiche</label>
-                                <input type="email" id="set-CONTACT_EMAIL" value="${settings.CONTACT_EMAIL || ''}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
+                                <input type="email" id="set-CONTACT_EMAIL" value="${settings.CONTACT_EMAIL || settings.businessEmail || settings.contactEmail || ''}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div> 
                         </div>
                     </div>
@@ -117,8 +126,8 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                         <div class="card-title">${isOwner ? 'Dati Barbieri' : 'Il mio Profilo'}</div>
                         <div id="settings-barbers-list" style="display: flex; flex-direction: column; gap: 20px; width: 100%; margin-bottom: 15px;">
                             ${isOwner 
-                                ? Object.entries(allBarbers).map(([id, b]) => createBarberBlockHtml(id, b)).join('')
-                                : createBarberBlockHtml(currentBarberId, allBarbers[currentBarberId])
+                                ? Object.entries(allBarbers).map(([id, b]) => createBarberBlockHtml(id, b || {})).join('')
+                                : createBarberBlockHtml(currentBarberId, allBarbers[currentBarberId] || {})
                             }
                         </div>
                         ${isOwner ? `<button onclick="addNewBarberBlock()" style="width: 100%; padding: 12px; border: 2px dashed #ccc; color: #888; background: #fdfdfd; border-radius: 15px; font-size: 0.8em; font-weight: 700;">+ AGGIUNGI BARBIERE</button>` : ''}
@@ -132,34 +141,34 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                             <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
                                 <span style="font-size: 0.9em; font-weight: 600; color: #333; line-height: 1.2;">Abilita tasto richiesta cancellazione appuntamento per i clienti</span>
                                 <label class="switch-btn">
-                                    <input type="checkbox" id="set-CANCELLATION_BUTTON" ${settings.CANCELLATION_BUTTON === true || settings.CANCELLATION_BUTTON === "TRUE" ? 'checked' : ''}>
+                                    <input type="checkbox" id="set-CANCELLATION_BUTTON" ${(settings.CANCELLATION_BUTTON === true || settings.CANCELLATION_BUTTON === "TRUE" || settings.cancellationButton === true) ? 'checked' : ''}>
                                     <span class="slider"></span>
                                 </label>
                             </div>
 
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Ore massime prima dell'appuntamento per richiedere la cancellazione</label>
-                                <input type="number" id="set-MIN_CANCELLATION_HOURS" value="${settings.MIN_CANCELLATION_HOURS || 24}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
+                                <input type="number" id="set-MIN_CANCELLATION_HOURS" value="${settings.MIN_CANCELLATION_HOURS ?? settings.minCancellationHours ?? 24}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div>
 
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Minuti dopo la prenotazione per annullare autonomamente l'appuntamento</label>
-                                <input type="number" id="set-AUTO_CANCELLATION_MINUTES" value="${settings.AUTO_CANCELLATION_MINUTES || 5}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
+                                <input type="number" id="set-AUTO_CANCELLATION_MINUTES" value="${settings.AUTO_CANCELLATION_MINUTES ?? settings.autoCancellationMinutes ?? 5}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div>
 
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Giorni futuri che il cliente ha per prenotare</label>
-                                <input type="number" id="set-BOOKING_WINDOW_DAYS" value="${settings.BOOKING_WINDOW_DAYS || 15}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
+                                <input type="number" id="set-BOOKING_WINDOW_DAYS" value="${settings.BOOKING_WINDOW_DAYS ?? settings.bookingWindowDays ?? 15}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div>
 
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Disponibilità appuntamenti da (n. giorni a partire da oggi, es. 0 = Oggi, 1 = Domani):</label>
-                                <input type="number" id="set-MIN_BOOKINGS_DAYS" min="0" value="${settings.MIN_BOOKINGS_DAYS !== undefined ? settings.MIN_BOOKINGS_DAYS : 0}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
+                                <input type="number" id="set-MIN_BOOKINGS_DAYS" min="0" value="${settings.MIN_BOOKINGS_DAYS !== undefined ? settings.MIN_BOOKINGS_DAYS : (settings.minBookingsDays !== undefined ? settings.minBookingsDays : 0)}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div>
 
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Giorni di storico appuntamenti passati visibili</label>
-                                <input type="number" id="set-BOOKING_HISTORY" value="${settings.BOOKING_HISTORY || 90}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
+                                <input type="number" id="set-BOOKING_HISTORY" value="${settings.BOOKING_HISTORY ?? settings.bookingHistory ?? 15}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
                             </div>
                         </div>
                     </div>
@@ -171,7 +180,7 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                             <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
                                 <span style="font-size: 0.9em; font-weight: 600; color: #333; line-height: 1.2;">Abilita tutte le notifiche email (conferma, cancellazione, promemoria)</span>
                                 <label class="switch-btn">
-                                    <input type="checkbox" id="set-EMAIL_NOTIFICATION" ${settings.EMAIL_NOTIFICATION === true || settings.EMAIL_NOTIFICATION === "TRUE" ? 'checked' : ''}>
+                                    <input type="checkbox" id="set-EMAIL_NOTIFICATION" ${(settings.EMAIL_NOTIFICATION === true || settings.EMAIL_NOTIFICATION === "TRUE" || settings.emailNotification === true) ? 'checked' : ''}>
                                     <span class="slider"></span>
                                 </label>
                             </div>
@@ -179,14 +188,14 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                             <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 5px; padding-top: 5px; border-top: 1px solid #f9f9f9;">
                                 <span style="font-size: 0.9em; font-weight: 600; color: #333; line-height: 1.2;">Invia una notifica email al barbiere per ogni nuova prenotazione</span>
                                 <label class="switch-btn">
-                                    <input type="checkbox" id="set-BARBER_BOOKING_NOTIFICATION" ${settings.BARBER_BOOKING_NOTIFICATION === true || settings.BARBER_BOOKING_NOTIFICATION === "TRUE" ? 'checked' : ''}>
+                                    <input type="checkbox" id="set-BARBER_BOOKING_NOTIFICATION" ${(settings.BARBER_BOOKING_NOTIFICATION === true || settings.BARBER_BOOKING_NOTIFICATION === "TRUE" || settings.barberBookingNotification === true) ? 'checked' : ''}>
                                     <span class="slider"></span>
                                 </label>
                             </div>
                             
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Ore preavviso promemoria</label>
-                                <input type="number" id="set-REMINDER_NOTIFICATION_TIME" value="${settings.REMINDER_NOTIFICATION_TIME || 24}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
+                                <input type="number" id="set-REMINDER_NOTIFICATION_TIME" value="${settings.REMINDER_NOTIFICATION_TIME ?? settings.reminderNotificationTime ?? 24}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
                             </div>
                         </div>
                     </div>
@@ -280,7 +289,6 @@ function saveAllSettings(btn = null) {
         const id = block.dataset.id;
         const bData = { id: id };
         const inputs = block.querySelectorAll(`.barber-inp[data-id="${id}"]`);
-        bData.calendarId = 'primary'; // Valore fisso non più modificabile
         inputs.forEach(inp => {
             bData[inp.dataset.f] = inp.value.trim();
         });
@@ -291,10 +299,41 @@ function saveAllSettings(btn = null) {
         barbersArray.push(bData);
     });
 
+    // Aggiornamento immediato in-memory della cache locale per reattività istantanea
+    if (typeof cachedAppData !== 'undefined' && cachedAppData) {
+        if (!cachedAppData.settings) cachedAppData.settings = {};
+        Object.assign(cachedAppData.settings, settingsData);
+
+        if (!cachedAppData.barbers) cachedAppData.barbers = {};
+        barbersArray.forEach(b => {
+            const bId = b.id || b.barberId;
+            if (!bId) return;
+            if (!cachedAppData.barbers[bId]) cachedAppData.barbers[bId] = {};
+            const cur = cachedAppData.barbers[bId];
+            cur.nome = b.nome || b.name || cur.nome || 'Barbiere';
+            cur.name = cur.nome;
+            cur.calendarId = b.calendarId || cur.calendarId || '';
+            cur.email = b.email || cur.email || '';
+            cur.telefono = b.telefono || b.phone || cur.telefono || '';
+            cur.phone = cur.telefono;
+            cur.isActive = b.isActive !== undefined ? b.isActive : true;
+            if (b.foto) {
+                cur.photoName = b.foto;
+                if (typeof resolveLocalPhotoUrl === 'function') {
+                    cur.foto = resolveLocalPhotoUrl(b.foto, cur.nome, true);
+                }
+            }
+            if (b.password) cur.password = b.password;
+        });
+    }
+
     // 3. Invio al server
     google.script.run
         .withSuccessHandler(res => {
             if (res && res.status === "OK") {
+                if (typeof directCleanupOldBookings === 'function') {
+                    directCleanupOldBookings();
+                }
                 if (btn) {
                     showCustomAlert("Successo", "Tutte le impostazioni sono state salvate correttamente.", () => {
                         // Chiudi tutti i popup e reindirizza alla dashboard home, aggiornando i dati

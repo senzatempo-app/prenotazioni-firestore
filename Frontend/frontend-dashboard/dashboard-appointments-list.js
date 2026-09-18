@@ -34,8 +34,15 @@ function renderBarberAppointmentsListPage(skipPush = false) {
         </div>
     `;
 
-    // Usa agenda già caricata
-    renderAppointmentsCards(cachedBarberAppointments);
+    // Usa agenda già caricata o carica al volo se cache non disponibile
+    if (!cachedBarberAppointments && currentDisplayedBarberId) {
+        google.script.run.withSuccessHandler(apps => {
+            cachedBarberAppointments = apps || [];
+            renderAppointmentsCards(cachedBarberAppointments);
+        }).getBarberAppointments(currentDisplayedBarberId);
+    } else {
+        renderAppointmentsCards(cachedBarberAppointments || []);
+    }
 }
 
 function toggleWeeklyVisibility() {
@@ -56,11 +63,11 @@ function renderAppointmentsCards(appointments) {
     const showWeekly = localStorage.getItem('dashboard_show_weekly') === 'true';
     let displayList = [...appointments];
 
-    // Rimuove tutte le indisponibilità (personali e festività) dalla lista
-    displayList = displayList.filter(a => a.status.toLowerCase() !== 'indisponibile');
+    // Rimuove tutte le indisponibilità (personali e festività) dalla lista (case-insensitive)
+    displayList = displayList.filter(a => String(a.status || '').trim().toLowerCase() !== 'indisponibile');
 
     if (!showWeekly) {
-        displayList = displayList.filter(a => a.status.toLowerCase() !== 'weekly');
+        displayList = displayList.filter(a => String(a.status || '').trim().toLowerCase() !== 'weekly');
     }
 
     if (displayList.length === 0) {
@@ -69,19 +76,23 @@ function renderAppointmentsCards(appointments) {
     }
 
     // Ordiniamo gli appuntamenti: il più lontano nel futuro in cima (ordine decrescente)
-    displayList.sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime());
+    displayList.sort((a, b) => new Date(b.start || b.startISO || 0).getTime() - new Date(a.start || a.startISO || 0).getTime());
 
     let html = '';
     let lastDate = '';
     const now = new Date();
 
     displayList.forEach(appointment => {
-        const startDate = new Date(appointment.start);
-        const isPast = startDate < now;
+        const startDate = new Date(appointment.start || appointment.startISO);
+        const isPast = !isNaN(startDate.getTime()) && startDate < now;
         // Formattazione data per il separatore (es: lunedì 24 maggio)
-        const dateStr = startDate.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' });
+        const dateStr = !isNaN(startDate.getTime()) 
+            ? startDate.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })
+            : 'Data non valida';
         // Formattazione orario hh:mm
-        const timeStr = startDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+        const timeStr = !isNaN(startDate.getTime())
+            ? startDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })
+            : '--:--';
 
         // Inserimento del separatore se il giorno cambia
         if (dateStr !== lastDate) {
@@ -89,11 +100,15 @@ function renderAppointmentsCards(appointments) {
             lastDate = dateStr;
         }
 
-        // Gestione visiva per lo stato (Cancellazione o Settimanale)
-        const isPendingCancel = appointment.status === 'Richiesta cancellazione';
-        const isWeekly = appointment.status.toLowerCase() === 'weekly';
+        // Gestione visiva per lo stato (Cancellazione o Settimanale) case-insensitive
+        const statusLower = String(appointment.status || '').trim().toLowerCase();
+        const isPendingCancel = statusLower === 'richiesta cancellazione';
+        const isWeekly = statusLower === 'weekly';
         const statusColor = isPendingCancel ? '#dc3545' : (isWeekly ? '#3498db' : '#999');
         const statusWeight = (isPendingCancel || isWeekly) ? '700' : '400';
+        const cancelReason = appointment.cancelReason || appointment.cancellationReason || '';
+        const safeClientName = String(appointment.clientName || '').replace(/'/g, "\\'");
+        const safeService = String(appointment.service || '').replace(/_/g, ' ');
 
         html += `
             <div class="booking-card" style="flex-direction: column; padding: 10px 15px; margin-bottom: 0; ${isPast ? 'opacity: 0.6; background-color: #f8f8f8;' : ''} ${isPendingCancel ? 'border-left: 5px solid #dc3545;' : ''} ${isWeekly ? 'border-left: 5px solid #3498db;' : ''}">
@@ -101,21 +116,21 @@ function renderAppointmentsCards(appointments) {
                 <div style="display: flex; align-items: center; gap: 15px;">
                     <div style="font-weight: 800; font-size: 1.1em; color: #1a1a1a; min-width: 50px;">${timeStr}</div>
                     <div style="display: flex; flex-direction: column;">
-                        <div style="font-weight: 700; color: #333; font-size: 0.95em;">${appointment.clientName}</div>
-                        <div style="font-size: 0.8em; color: #666;">${appointment.service}</div>
+                        <div style="font-weight: 700; color: #333; font-size: 0.95em;">${appointment.clientName || 'Cliente'}</div>
+                        <div style="font-size: 0.8em; color: #666;">${safeService}</div>
                     </div>
                 </div>
             <div style="display: flex; gap: 10px; align-items: center;">
                 <div style="text-align: right;">
                     <div style="font-size: 0.7em; color: ${statusColor}; font-weight: ${statusWeight}; text-transform: uppercase;">${appointment.status}</div>
                 </div>
-                <button onclick="confirmCancelStandardAppointment('${appointment.id}', '${appointment.clientName}', '${dateStr} ${timeStr}')" style="border:none; background:none; padding:5px; color:#dc3545; cursor:pointer; display:flex;" title="Elimina appuntamento">
+                <button onclick="confirmCancelStandardAppointment('${appointment.id || appointment.bookingId}', '${safeClientName}', '${dateStr} ${timeStr}')" style="border:none; background:none; padding:5px; color:#dc3545; cursor:pointer; display:flex;" title="Elimina appuntamento">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                 </button>
                 </div>
                 </div>
-                ${isPendingCancel && appointment.cancelReason ? `
-                    <div style="margin-top: 8px; padding: 8px; background: #fff5f5; border-radius: 8px; font-size: 0.8em; color: #666; border: 1px solid #feb2b2;"><strong>Motivo:</strong> ${appointment.cancelReason}</div>
+                ${isPendingCancel && cancelReason ? `
+                    <div style="margin-top: 8px; padding: 8px; background: #fff5f5; border-radius: 8px; font-size: 0.8em; color: #666; border: 1px solid #feb2b2;"><strong>Motivo:</strong> ${cancelReason}</div>
                 ` : ''}
             </div>
         `;
@@ -147,9 +162,10 @@ function confirmCancelStandardAppointment(bookingId, clientName, dateTime, sourc
         document.getElementById('cancel-back-btn').onclick = () => {
             existingPopup.innerHTML = originalContent;
             // Dobbiamo ri-associare gli eventi persi con la sostituzione dell'HTML
-            const appointment = cachedBarberAppointments.find(a => a.id === bookingId);
+            const appointment = (cachedBarberAppointments || []).find(a => (a.id === bookingId || a.bookingId === bookingId));
             if (appointment) {
-                showAppointmentDetailsPopup(appointment.id, appointment.clientName, appointment.service, appointment.start, appointment.end, appointment.clientPhone, currentDisplayedBarberId, appointment.status, appointment.cancelReason);
+                const cReason = appointment.cancelReason || appointment.cancellationReason || '';
+                showAppointmentDetailsPopup(appointment.id || appointment.bookingId, appointment.clientName, appointment.service, appointment.start, appointment.end, appointment.clientPhone, currentDisplayedBarberId, appointment.status, cReason);
                 existingPopup.closest('.popup-overlay').remove(); // Rimuovi il vecchio e lascia che show... ne crei uno nuovo e pulito
             }
         };
@@ -180,7 +196,9 @@ function confirmCancelStandardAppointment(bookingId, clientName, dateTime, sourc
                 const detailsOverlay = document.getElementById('appointment-details-overlay');
                 const shouldGoToHome = !!detailsOverlay;
                 // Rimuoviamo l'appuntamento dalla cache locale
-                cachedBarberAppointments = cachedBarberAppointments.filter(a => a.id !== bookingId);
+                if (cachedBarberAppointments) {
+                    cachedBarberAppointments = cachedBarberAppointments.filter(a => a.id !== bookingId && a.bookingId !== bookingId);
+                }
 
                 // Mostra l'alert di successo dopo aver sistemato la navigazione
                 showCustomAlert("Cancellato", "L'appuntamento è stato rimosso e il cliente è stato avvisato.");
