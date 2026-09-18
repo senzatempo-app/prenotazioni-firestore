@@ -89,6 +89,37 @@ const APP_API_BASE = "";
     'manageService': async (args) => {
       if (typeof directManageService !== 'function') return null;
       return await directManageService(args[0], args[1]);
+    },
+    'updateAppointment': async (args) => {
+      if (typeof directUpdateAppointment !== 'function') return null;
+      return await directUpdateAppointment(...args);
+    },
+    'updateIndisponibilita': async (args) => {
+      if (typeof directUpdateIndisponibilita !== 'function') return null;
+      return await directUpdateIndisponibilita(...args);
+    },
+    'getWeeklyConflictsPreview': (args) => {
+      return typeof directGetWeeklyConflictsPreview === 'function' ? directGetWeeklyConflictsPreview(...args) : null;
+    },
+    'saveWeeklyAppointment': async (args) => {
+      if (typeof directSaveWeeklyAppointment !== 'function') return null;
+      return await directSaveWeeklyAppointment(...args);
+    },
+    'removeWeeklyAppointment': async (args) => {
+      if (typeof directRemoveWeeklyAppointment !== 'function') return null;
+      return await directRemoveWeeklyAppointment(...args);
+    },
+    'toggleHolidayClosure': async (args) => {
+      if (typeof directToggleHolidayClosure !== 'function') return null;
+      return await directToggleHolidayClosure(...args);
+    },
+    'manageCustomHoliday': async (args) => {
+      if (typeof directManageCustomHoliday !== 'function') return null;
+      return await directManageCustomHoliday(...args);
+    },
+    'saveIndisponibilita': async (args) => {
+      if (typeof directSaveIndisponibilitaRange !== 'function') return null;
+      return await directSaveIndisponibilitaRange(args[0], args[1], args[1], args[2], args[3], args[4]);
     }
   };
 

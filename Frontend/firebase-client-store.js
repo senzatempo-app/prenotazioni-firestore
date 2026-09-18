@@ -40,11 +40,12 @@ function formatTimestampToIso(val) {
  * File di foto locali disponibili nella cartella Frontend/Photo
  */
 const KNOWN_LOCAL_PHOTOS = [
-  'barber_1.jpg',
-  'taglio.jpeg',
-  'barba.png',
-  'shampoo.jpeg',
-  'taglio e barba.jpeg'
+  'barber_1.jpg', 'barber_1.png', 'barber_1.jpeg',
+  'taglio.jpeg', 'taglio.png', 'Taglio.png', 'Taglio.jpeg',
+  'barba.png', 'barba.jpeg', 'Barba.png', 'Barba.jpeg',
+  'shampoo.jpeg', 'shampoo.png', 'Shampoo.png', 'Shampoo.jpeg',
+  'taglio e barba.jpeg', 'taglio e barba.png', 'Taglio e Barba.jpeg', 'Taglio e Barba.png',
+  'tagliobarba.png', 'tagliobarba.jpeg'
 ];
 
 /**
@@ -249,7 +250,7 @@ async function directGetSettings() {
 }
 
 /**
- * Recupera la lista dei barbieri con mappatura dei campi (photoName -> foto)
+ * Recupera la lista dei barbieri con mappatura dei campi (photoUrl -> foto)
  */
 async function directGetBarbersList(all = false) {
   const records = await fetchCollectionDocs('barbers');
@@ -259,7 +260,7 @@ async function directGetBarbersList(all = false) {
     if (!id) return;
     const isEnabled = doc.isActive !== false && doc.isActive !== 'FALSE';
     if (all || isEnabled) {
-      const pName = doc.photoName || doc.foto || '';
+      const rawFoto = doc.photoName || doc.photoUrl || doc.foto || doc.imageUrl || '';
       const bNome = doc.name || doc.nome || 'Barbiere';
       result[id] = {
         nome: bNome,
@@ -267,8 +268,8 @@ async function directGetBarbersList(all = false) {
         telefono: doc.phone || doc.telefono || '',
         email: doc.email || '',
         password: doc.password || '',
-        photoName: pName,
-        foto: resolveLocalPhotoUrl(pName, bNome, true),
+        photoName: doc.photoName || (rawFoto && !rawFoto.includes('://') ? rawFoto : ''),
+        foto: resolveLocalPhotoUrl(doc.photoName || rawFoto, bNome, true),
         isActive: doc.isActive !== undefined ? doc.isActive : true
       };
     }
@@ -283,7 +284,7 @@ async function directGetBarbersList(all = false) {
 async function directGetServices(all = false) {
   const records = await fetchCollectionDocs('services');
   const mapped = records.map(doc => {
-    const pName = doc.photoName || doc.foto || doc.image || '';
+    const rawImg = doc.photoName || doc.photoUrl || doc.imageUrl || doc.foto || doc.image || doc.img || '';
     const duration = parseInt(doc.durationMin || doc.duration || doc.durata || 30, 10) || 30;
     const sName = doc.name || doc.nome || 'Servizio';
     return {
@@ -291,8 +292,8 @@ async function directGetServices(all = false) {
       name: sName,
       duration: duration,
       price: doc.price || doc.prezzo || 0,
-      photoName: pName,
-      imageUrl: resolveLocalPhotoUrl(pName, sName, false),
+      photoName: doc.photoName || (rawImg && !rawImg.includes('://') ? rawImg : ''),
+      imageUrl: resolveLocalPhotoUrl(doc.photoName || rawImg, sName, false),
       isActive: doc.isActive !== undefined ? doc.isActive : true
     };
   });
@@ -407,8 +408,8 @@ async function directGetUserBookings(identifier) {
     const cPhone = (c.phone || c.telefono || '').replace(/\D/g, '');
     const cId = String(c.clientId || c.id || '');
     return (cEmail && cEmail === lowerId) ||
-           (cleanPhone && cPhone && cPhone === cleanPhone) ||
-           (cId && cId === identifier);
+      (cleanPhone && cPhone && cPhone === cleanPhone) ||
+      (cId && cId === identifier);
   });
 
   const DAY_NAMES = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
@@ -1279,9 +1280,9 @@ async function directSaveGlobalSettings(settingsData, barbersArray) {
         phone: b.telefono || b.phone || '',
         isActive: b.isActive !== undefined ? b.isActive : true
       };
-      const pName = b.photoName || b.foto || '';
+      const pName = b.photoName || b.foto || b.photoUrl || '';
       if (pName) {
-        bPayload.photoName = pName;
+        bPayload.photoName = pName.replace(/^\.\/Frontend\/Photo\//, '').replace(/^Frontend\/Photo\//, '');
       }
       if (b.password) bPayload.password = b.password;
       batch.set(barberRef, bPayload, { merge: true });
@@ -1475,7 +1476,8 @@ async function directManageService(action, serviceData) {
     const id = 'svc_' + Date.now();
     const duration = parseInt(serviceData.duration || serviceData.durationMin, 10) || 30;
     const price = parseFloat(serviceData.price) || 0;
-    const pName = serviceData.photoName || serviceData.imageUrl || '';
+    const rawPhoto = serviceData.photoName || serviceData.imageUrl || serviceData.photoUrl || '';
+    const pName = rawPhoto.replace(/^\.\/Frontend\/Photo\//, '').replace(/^Frontend\/Photo\//, '');
     const newDoc = {
       name: serviceData.name || '',
       durationMin: duration,
@@ -1494,7 +1496,8 @@ async function directManageService(action, serviceData) {
       const id = match.id || match.serviceId;
       const duration = parseInt(serviceData.duration || serviceData.durationMin || match.durationMin, 10) || 30;
       const price = serviceData.price !== undefined ? parseFloat(serviceData.price) : (match.price || 0);
-      const pName = serviceData.photoName || serviceData.imageUrl || match.photoName || '';
+      const rawPhoto = serviceData.photoName || serviceData.imageUrl || serviceData.photoUrl || match.photoName || '';
+      const pName = rawPhoto.replace(/^\.\/Frontend\/Photo\//, '').replace(/^Frontend\/Photo\//, '');
       const updateDoc = {
         name: serviceData.name || match.name,
         durationMin: duration,
