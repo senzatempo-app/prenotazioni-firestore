@@ -171,9 +171,9 @@ const EMAIL_TEMPLATES = {
 
   // 3. Cancellazione appuntamento inviata al cliente
   bookingCancellation: {
-    subject: "Annullamento Appuntamento - \${businessName}",
+    subject: "Appuntamento Cancellato - \${businessName}",
     body: `<p>Ciao <strong>\${clientName}</strong>,</p>
-<p>il tuo appuntamento per <strong>\${serviceName}</strong> previsto per <strong>\${fullDate}</strong> con <strong>\${barberName}</strong> è stato annullato.</p>
+<p>il tuo appuntamento per <strong>\${serviceName}</strong> previsto per <strong>\${fullDate}</strong> con <strong>\${barberName}</strong> è stato cancellato.</p>
 <p>Se desideri prenotare un nuovo appuntamento, visita il nostro sito.</p>`
   },
 
@@ -215,9 +215,9 @@ const EMAIL_TEMPLATES = {
 
   // 8. Cancellazione appuntamento fisso settimanale inviata al cliente
   weeklyCancellation: {
-    subject: "Cancellazione Appuntamento Fisso - \${businessName}",
+    subject: "Appuntamento Fisso Cancellato - \${businessName}",
     body: `<p>Ciao <strong>\${clientName}</strong>,</p>
-<p>ti confermiamo la cancellazione del tuo appuntamento fisso per <strong>\${serviceName}</strong> del <strong>\${dayName}</strong> alle ore <strong>\${timeStr}</strong> con <strong>\${barberName}</strong>.</p>`
+<p>il tuo appuntamento fisso per <strong>\${serviceName}</strong> del <strong>\${dayName}</strong> alle ore <strong>\${timeStr}</strong> con <strong>\${barberName}</strong> è stato cancellato.</p>`
   },
 
   // 9. Promemoria appuntamento inviato al cliente
