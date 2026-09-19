@@ -10,12 +10,28 @@ let bookingState = {
 
 function renderPrenotazionePage(skipPush = false) {
     window.scrollTo(0, 0);
-    if (!skipPush) pushView('prenotazione');
     // Usiamo i dati caricati in Home per velocizzare il passaggio
     if (!cachedAppData) { renderHomePage(); return; }
 
-    const settings = cachedAppData.settings;
-    const workingHours = cachedAppData.workingHours;
+    const settings = cachedAppData.settings || {};
+    const maxFuture = parseInt(settings.MAX_FUTURE_BOOKINGS ?? settings.maxFutureBookings ?? 3, 10) || 3;
+    const bookings = Array.isArray(cachedAppData.userBookings)
+      ? cachedAppData.userBookings
+      : (cachedAppData.userBookings && Array.isArray(cachedAppData.userBookings.data) ? cachedAppData.userBookings.data : []);
+    const nowMs = Date.now();
+    const activeFuture = bookings.filter(b => {
+      const st = (b.stato || b.status || '').toLowerCase().trim();
+      const isActive = st === 'confermato' || st === 'richiesta cancellazione' || st === 'weekly' || st === 'w e e k l y';
+      const bTime = b.timestamp || (b.dataOriginale ? new Date(b.dataOriginale).getTime() : (b.startISO ? new Date(b.startISO).getTime() : 0));
+      return isActive && bTime >= nowMs;
+    });
+
+    if (activeFuture.length >= maxFuture) {
+      showCustomAlert("Limite raggiunto", `Hai già raggiunto il limite massimo di ${maxFuture} prenotazioni attive. Potrai prenotare un nuovo appuntamento dopo aver effettuato o annullato uno di quelli già prenotati.`);
+      return;
+    }
+
+    if (!skipPush) pushView('prenotazione');
 
         bookingState.service = null;
         bookingState.day = null;

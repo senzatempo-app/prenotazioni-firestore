@@ -5,6 +5,30 @@
  */
 
 /**
+ * Sanitizza una stringa per l'utilizzo come slug pulito e valido in ID Firestore (minuscolo, senza accenti, caratteri speciali o spazi).
+ */
+function sanitizeSlug(str) {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // rimuove accenti
+    .replace(/[^a-z0-9]/g, '_')     // sostituisce caratteri non alfanumerici con _
+    .replace(/_+/g, '_')           // collassa underscore multipli
+    .replace(/^_|_$/g, '');        // rimuove underscore iniziali/finali
+}
+
+/**
+ * Costruisce l'ID univoco e leggibile per un cliente: cl_nome_cognome_telefono
+ */
+function buildClientId(nome, cognome, phone) {
+  const n = sanitizeSlug(nome) || 'cliente';
+  const c = sanitizeSlug(cognome) || '';
+  const p = String(phone || '').replace(/\D/g, '');
+  const namePart = c ? `${n}_${c}` : n;
+  return `cl_${namePart}${p ? '_' + p : ''}`;
+}
+
+/**
  * Recupera la lista dei clienti
  */
 async function directGetClientsList() {
@@ -125,7 +149,7 @@ async function directRegisterOrUpdateUser(userData) {
   const taglioService = services.find(s => (s.name || '').toLowerCase().trim() === 'taglio');
   const defaultCutTime = taglioService ? (taglioService.durationMin || taglioService.duration || 40) : 40;
 
-  const newClientId = 'cl_' + Date.now();
+  const newClientId = buildClientId(cleanNome, cleanCognome, cleanPhone);
   const newClientDoc = {
     clientId: newClientId,
     name: cleanNome,

@@ -105,7 +105,10 @@ function renderBarberWorkingHoursPage(skipPush = false, isSilent = false) {
                         <div id="holiday-suggestions" class="booking-card ${animClass} hidden" style="animation-delay: 0.2s; margin-top: 15px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 15px;">
                                 <div class="card-title" style="margin: 0;">Chiusure per festività</div>
-                                <button onclick="showHolidayEditor()" style="background: #8A9A5B; color: white; border: none; padding: 6px 12px; border-radius: 20px; font-weight: 700; font-size: 0.85em; cursor: pointer;">+ RICORRENZA</button>
+                                <div style="display: flex; gap: 8px;">
+                                    <button onclick="handleRegenerateHolidays(this)" style="background: transparent; color: #8A9A5B; border: 1.5px solid #8A9A5B; padding: 6px 12px; border-radius: 20px; font-weight: 700; font-size: 0.85em; cursor: pointer;">RIGENERA</button>
+                                    <button onclick="showHolidayEditor()" style="background: #8A9A5B; color: white; border: none; padding: 6px 12px; border-radius: 20px; font-weight: 700; font-size: 0.85em; cursor: pointer;">+ RICORRENZA</button>
+                                </div>
                             </div>
                             <div id="holidays-list" style="display: flex; flex-direction: column; gap: 8px; width: 100%;"></div>
                         </div>
@@ -480,6 +483,26 @@ function handleHolidayToggle(iso, name, el, force = false) {
             showCustomAlert("Errore", res.message);
         }
     }).toggleHolidayClosure(iso, name, shouldClose, force);
+}
+
+function handleRegenerateHolidays(btn) {
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = "Rigenerazione...";
+    }
+    google.script.run.withSuccessHandler(res => {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = "RIGENERA";
+        }
+        if (res && res.status === "OK") {
+            if (res.holidays) cachedAppData.italianHolidays = res.holidays;
+            showCustomAlert("Festività Rigenerate", `Chiusure per festività rigenerate con successo nel calendario.`);
+            refreshDashboardData(true);
+        } else {
+            showCustomAlert("Errore", (res && res.message) ? res.message : "Errore durante la rigenerazione delle festività.");
+        }
+    }).regenerateHolidayClosures();
 }
 
 function showHolidayEditor(oldName = null) {

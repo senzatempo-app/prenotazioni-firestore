@@ -135,11 +135,15 @@ async function directManageService(action, serviceData) {
 
 /**
  * Salva gli impegni personali / indisponibilità direttamente su Firestore
+ * Gestisce i conflitti con appuntamenti esistenti (confermati, richiesta cancellazione, weekly)
+ * Se force = false: restituisce l'elenco dei conflitti da mostrare nel popup
+ * Se force = true: elimina definitivamente gli appuntamenti in conflitto e salva l'impegno
  */
 async function directSaveIndisponibilitaRange(barberId, startDateIso, endDateIso, startTime, endTime, note = '', force = false) {
   const store = initFirebaseClient();
   if (!store) throw new Error("Firestore SDK non disponibile");
 
+  const effectiveBarberId = String(barberId || 'barber_1').trim();
   const [sH, sM] = (startTime || '09:00').split(':').map(Number);
   const [eH, eM] = (endTime || '10:00').split(':').map(Number);
   let durationMin = (eH * 60 + (eM || 0)) - (sH * 60 + (sM || 0));
@@ -149,45 +153,125 @@ async function directSaveIndisponibilitaRange(barberId, startDateIso, endDateIso
   const finalDate = new Date(`${endDateIso || startDateIso}T00:00:00`);
   if (isNaN(curDate.getTime())) throw new Error("Data inizio impegno non valida");
 
-  const batch = store.batch();
+  // Calcola tutti gli intervalli temporali dell'impegno
+  const targetRanges = [];
   let count = 0;
-
-  while (curDate <= finalDate && count < 60) {
-    const y = curDate.getFullYear();
-    const m = String(curDate.getMonth() + 1).padStart(2, '0');
-    const d = String(curDate.getDate()).padStart(2, '0');
+  const loopDate = new Date(curDate);
+  while (loopDate <= finalDate && count < 60) {
+    const y = loopDate.getFullYear();
+    const m = String(loopDate.getMonth() + 1).padStart(2, '0');
+    const d = String(loopDate.getDate()).padStart(2, '0');
     const dayIsoStr = `${y}-${m}-${d}`;
     const startDateTime = new Date(`${dayIsoStr}T${String(sH).padStart(2, '0')}:${String(sM || 0).padStart(2, '0')}:00`);
+    const startMs = startDateTime.getTime();
+    const endMs = startMs + durationMin * 60000;
 
-    const id = 'indispo_' + Date.now() + '_' + count;
-    const ref = store.collection('bookings').doc(id);
+    targetRanges.push({
+      startMs,
+      endMs,
+      startDateTime,
+      dayIsoStr,
+      id: 'indispo_' + Date.now() + '_' + count
+    });
+    count++;
+    loopDate.setDate(loopDate.getDate() + 1);
+  }
 
+  // 1. Recupera tutte le prenotazioni per verificare i conflitti
+  const allBookings = await fetchCollectionDocs('bookings');
+  const conflictingBookings = allBookings.filter(b => {
+    const bBarberId = String(b.barberId || '').trim();
+    if (bBarberId && bBarberId !== effectiveBarberId) return false;
+
+    const st = (b.status || '').toLowerCase().trim();
+    // Appuntamenti che vanno in conflitto: confermati, in richiesta cancellazione o weekly
+    const isConflictingStatus = st === 'confermato' || st === 'richiesta cancellazione' || st === 'weekly';
+    if (!isConflictingStatus) return false;
+
+    const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+    if (!bIso) return false;
+    const bStart = new Date(bIso).getTime();
+    if (isNaN(bStart)) return false;
+    const bDur = (parseInt(b.duration, 10) || 30) * 60000;
+    const bEnd = bStart + bDur;
+
+    return targetRanges.some(tr => bStart < tr.endMs && bEnd > tr.startMs);
+  });
+
+  // 2. Se ci sono conflitti e force è false, restituisci l'elenco dei conflitti da mostrare nel popup
+  if (conflictingBookings.length > 0 && !force) {
+    const conflicts = conflictingBookings.map(b => {
+      const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+      const bDate = new Date(bIso);
+      const dayStr = bDate.toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: '2-digit' });
+      const startH = String(bDate.getHours()).padStart(2, '0');
+      const startM = String(bDate.getMinutes()).padStart(2, '0');
+      const bDur = parseInt(b.duration, 10) || 30;
+      const bEndDate = new Date(bDate.getTime() + bDur * 60000);
+      const endH = String(bEndDate.getHours()).padStart(2, '0');
+      const endM = String(bEndDate.getMinutes()).padStart(2, '0');
+      const statusLabel = b.status === 'weekly' ? ' [Fisso]' : (b.status === 'Richiesta cancellazione' ? ' [In Canc.]' : '');
+      return {
+        id: b.id || b.bookingId,
+        time: `${dayStr} ${startH}:${startM} - ${endH}:${endM}${statusLabel}`,
+        name: b.clientName || 'Cliente',
+        service: b.service || 'Taglio',
+        status: b.status || ''
+      };
+    });
+    return { status: "CONFLICT", conflicts: conflicts };
+  }
+
+  // 3. Se force è true (o non ci sono conflitti): esegui l'inserimento ed elimina i conflitti
+  const batch = store.batch();
+
+  // Elimina realmente tutti gli appuntamenti in conflitto
+  conflictingBookings.forEach(b => {
+    const docId = String(b.id || b.bookingId);
+    batch.delete(store.collection('bookings').doc(docId));
+  });
+
+  // Crea i nuovi documenti di indisponibilità
+  targetRanges.forEach(tr => {
+    const ref = store.collection('bookings').doc(tr.id);
     const indispoDoc = {
-      barberId: barberId || 'barber_1',
-      bookingId: id,
+      barberId: effectiveBarberId,
+      bookingId: tr.id,
       clientId: 'indisponibilita',
       clientName: note || 'Impegno Personale',
       service: note || 'Impegno',
       duration: durationMin,
-      startISO: firebase.firestore.Timestamp.fromDate(startDateTime),
+      startISO: firebase.firestore.Timestamp.fromDate(tr.startDateTime),
       status: 'indisponibile',
       prenotationISO: firebase.firestore.Timestamp.fromDate(new Date()),
       cancellationReason: '',
       reminderSent: false
     };
-
     batch.set(ref, indispoDoc);
-    count++;
-    curDate.setDate(curDate.getDate() + 1);
-  }
+  });
 
   await batch.commit();
-  console.log(`[Firebase Direct] Salvati ${count} impegni su Firestore in batch write (< 30ms)`);
+  console.log(`[Firebase Direct] Salvati ${targetRanges.length} impegni su Firestore. Eliminati ${conflictingBookings.length} appuntamenti in conflitto.`);
+
+  // Invia notifiche email di cancellazione ai clienti degli appuntamenti eliminati
+  if (conflictingBookings.length > 0 && typeof directSendEmailNotification === 'function') {
+    conflictingBookings.forEach(b => {
+      const cEmail = b.clientEmail || b.email || '';
+      if (cEmail) {
+        directSendEmailNotification('bookingCancellation', {
+          booking: b,
+          reason: note ? `Impegno barbiere: ${note}` : 'Impegno personale del barbiere'
+        });
+      }
+    });
+  }
+
   return { status: 'OK' };
 }
 
 /**
  * Modifica un impegno personale / indisponibilità direttamente su Firestore (< 30ms)
+ * Gestisce i conflitti con appuntamenti esistenti (confermati, richiesta cancellazione, weekly)
  */
 async function directUpdateIndisponibilita(bookingId, startIso, endIso, note, force = false) {
   const store = initFirebaseClient();
@@ -197,7 +281,67 @@ async function directUpdateIndisponibilita(bookingId, startIso, endIso, note, fo
   const startD = new Date(startIso);
   const endD = new Date(endIso);
   const duration = Math.round((endD.getTime() - startD.getTime()) / 60000) || 60;
+  const rangeStart = startD.getTime();
+  const rangeEnd = rangeStart + duration * 60000;
 
+  const allBookings = await fetchCollectionDocs('bookings');
+  const currentIndispo = allBookings.find(b => (b.id || b.bookingId) === bookingId);
+  const barberId = currentIndispo ? String(currentIndispo.barberId || 'barber_1').trim() : 'barber_1';
+
+  // Trova appuntamenti in conflitto (escludendo l'impegno stesso che stiamo modificando)
+  const conflictingBookings = allBookings.filter(b => {
+    const docId = b.id || b.bookingId;
+    if (docId === bookingId) return false;
+
+    const bBarberId = String(b.barberId || '').trim();
+    if (bBarberId && bBarberId !== barberId) return false;
+
+    const st = (b.status || '').toLowerCase().trim();
+    const isConflictingStatus = st === 'confermato' || st === 'richiesta cancellazione' || st === 'weekly';
+    if (!isConflictingStatus) return false;
+
+    const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+    if (!bIso) return false;
+    const bStart = new Date(bIso).getTime();
+    if (isNaN(bStart)) return false;
+    const bDur = (parseInt(b.duration, 10) || 30) * 60000;
+    const bEnd = bStart + bDur;
+
+    return bStart < rangeEnd && bEnd > rangeStart;
+  });
+
+  if (conflictingBookings.length > 0 && !force) {
+    const conflicts = conflictingBookings.map(b => {
+      const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+      const bDate = new Date(bIso);
+      const dayStr = bDate.toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: '2-digit' });
+      const startH = String(bDate.getHours()).padStart(2, '0');
+      const startM = String(bDate.getMinutes()).padStart(2, '0');
+      const bDur = parseInt(b.duration, 10) || 30;
+      const bEndDate = new Date(bDate.getTime() + bDur * 60000);
+      const endH = String(bEndDate.getHours()).padStart(2, '0');
+      const endM = String(bEndDate.getMinutes()).padStart(2, '0');
+      const statusLabel = b.status === 'weekly' ? ' [Fisso]' : (b.status === 'Richiesta cancellazione' ? ' [In Canc.]' : '');
+      return {
+        id: b.id || b.bookingId,
+        time: `${dayStr} ${startH}:${startM} - ${endH}:${endM}${statusLabel}`,
+        name: b.clientName || 'Cliente',
+        service: b.service || 'Taglio',
+        status: b.status || ''
+      };
+    });
+    return { status: "CONFLICT", conflicts: conflicts };
+  }
+
+  const batch = store.batch();
+
+  // Elimina gli appuntamenti in conflitto
+  conflictingBookings.forEach(b => {
+    const docId = String(b.id || b.bookingId);
+    batch.delete(store.collection('bookings').doc(docId));
+  });
+
+  const updateRef = store.collection('bookings').doc(bookingId);
   const updateData = {
     startISO: firebase.firestore.Timestamp.fromDate(startD),
     duration: duration,
@@ -207,8 +351,22 @@ async function directUpdateIndisponibilita(bookingId, startIso, endIso, note, fo
     updateData.clientName = note;
     updateData.service = note;
   }
+  batch.update(updateRef, updateData);
 
-  await store.collection('bookings').doc(bookingId).update(updateData);
-  console.log(`[Firebase Direct] Impegno ${bookingId} aggiornato con successo su Firestore`);
+  await batch.commit();
+  console.log(`[Firebase Direct] Impegno ${bookingId} aggiornato su Firestore. Eliminati ${conflictingBookings.length} appuntamenti in conflitto.`);
+
+  if (conflictingBookings.length > 0 && typeof directSendEmailNotification === 'function') {
+    conflictingBookings.forEach(b => {
+      const cEmail = b.clientEmail || b.email || '';
+      if (cEmail) {
+        directSendEmailNotification('bookingCancellation', {
+          booking: b,
+          reason: note ? `Impegno barbiere: ${note}` : 'Impegno personale del barbiere'
+        });
+      }
+    });
+  }
+
   return { status: 'OK' };
 }

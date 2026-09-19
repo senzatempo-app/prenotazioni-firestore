@@ -374,17 +374,32 @@ function formatDateToIso(str) {
 }
 
 /**
- * Converte AAAA-MM-GG in GG/MM/AAAA per la visualizzazione.
+ * Converte AAAA-MM-GG in GG/MM/AAAA per la visualizzazione (formato GG/MM/AAAA a 2 cifre: es. 29/09/2026, 01/09/2026).
  */
 function formatDateToItalian(iso) {
     if (!iso || !iso.includes('-')) return iso;
     const parts = iso.split('-');
     if (parts.length !== 3) return iso;
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    const d = parts[2].trim().padStart(2, '0');
+    const m = parts[1].trim().padStart(2, '0');
+    const y = parts[0].trim();
+    return `${d}/${m}/${y}`;
 }
 
 /**
- * Converte una data ISO o YYYY-MM-DD nel formato esteso "Lunedì 15 settembre 2026"
+ * Normalizza qualsiasi stringa con date contenenti slash in formato a 2 cifre (es. "29/9/2026" -> "29/09/2026", "1/9/2026" -> "01/09/2026").
+ */
+function formatSlashDate2Digits(str) {
+    if (!str || typeof str !== 'string') return str;
+    return str.replace(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\b/g, (match, d, m, y) => {
+        const dPad = d.padStart(2, '0');
+        const mPad = m.padStart(2, '0');
+        return y ? `${dPad}/${mPad}/${y}` : `${dPad}/${mPad}`;
+    });
+}
+
+/**
+ * Converte una data ISO o YYYY-MM-DD nel formato esteso "Lunedì 15 settembre 2026" (giorno sempre a 2 cifre: "01 Settembre 2026")
  */
 function formatFullItalianDate(dateInput) {
     if (!dateInput) return '';
@@ -404,7 +419,7 @@ function formatFullItalianDate(dateInput) {
     const months = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
 
     const dayName = days[d.getDay()];
-    const dayNum = d.getDate();
+    const dayNum = String(d.getDate()).padStart(2, '0');
     const monthName = months[d.getMonth()];
     const year = d.getFullYear();
 

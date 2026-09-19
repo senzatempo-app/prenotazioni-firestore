@@ -5,6 +5,54 @@
  */
 
 /**
+ * Sanitizza una stringa per l'utilizzo come slug pulito e valido in ID Firestore (minuscolo, senza accenti, caratteri speciali o spazi).
+ */
+function sanitizeSlug(str) {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
+/**
+ * Costruisce l'ID univoco e cronologico per gli appuntamenti su Firestore:
+ * Standard: bk_YYYY-MM-DDTHH-mm_nome_cognome
+ * Settimanale: bk_YYYY-MM-DDTHH-mm_wk_nome_cognome
+ */
+function buildBookingId(startDate, clientName, isWeekly = false) {
+  const d = new Date(startDate);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const mins = String(d.getMinutes()).padStart(2, '0');
+  const dateIsoSlug = `${year}-${month}-${day}T${hours}-${mins}`;
+  const cleanName = sanitizeSlug(clientName) || 'cliente';
+  return isWeekly ? `bk_${dateIsoSlug}_wk_${cleanName}` : `bk_${dateIsoSlug}_${cleanName}`;
+}
+
+/**
+ * Costruisce l'ID univoco e ordinato per le regole settimanali ricorrenti su weeklyBookings:
+ * wb_giornoIndex_giorno_HHmm_nome_cognome (es. wb_2_martedi_1020_mario_rossi)
+ * Il prefisso numerico garantisce l'ordinamento naturale da Lunedì a Sabato nella console Firestore.
+ */
+function buildWeeklyRuleId(dayName, timeStr, clientName) {
+  const DAY_MAP = {
+    'domenica': 0, 'lunedì': 1, 'lunedi': 1, 'martedì': 2, 'martedi': 2,
+    'mercoledì': 3, 'mercoledi': 3, 'giovedì': 4, 'giovedi': 4,
+    'venerdì': 5, 'venerdi': 5, 'sabato': 6
+  };
+  const cleanDay = (dayName || '').toLowerCase().trim();
+  const dayIdx = DAY_MAP[cleanDay] !== undefined ? DAY_MAP[cleanDay] : 1;
+  const timeSlug = String(timeStr || '00:00').replace(/[^0-9]/g, '');
+  const cleanName = sanitizeSlug(clientName) || 'cliente';
+  return `wb_${dayIdx}_${sanitizeSlug(cleanDay)}_${timeSlug}_${cleanName}`;
+}
+
+/**
  * Recupera le prenotazioni per un utente cliente con gestione Timestamp Firestore.
  * Mappa i campi Firestore nei nomi italiani attesi dal rendering frontend
  * (stato, servizio, data, oraInizio, timestamp, barberName, calendarId, imageUrl).
@@ -56,9 +104,9 @@ async function directGetUserBookings(identifier) {
     const startDate = new Date(startIsoStr);
     const timestamp = isNaN(startDate.getTime()) ? 0 : startDate.getTime();
 
-    // Formatta la data: "Lunedì 15 Settembre 2025"
+    // Formatta la data: "Lunedì 15 Settembre 2025" (giorno a 2 cifre: "01")
     const dataFormatted = !isNaN(startDate.getTime())
-      ? `${DAY_NAMES[startDate.getDay()]} ${startDate.getDate()} ${MONTH_NAMES[startDate.getMonth()]} ${startDate.getFullYear()}`
+      ? `${DAY_NAMES[startDate.getDay()]} ${String(startDate.getDate()).padStart(2, '0')} ${MONTH_NAMES[startDate.getMonth()]} ${startDate.getFullYear()}`
       : '';
 
     // Formatta l'ora: "HH:mm"
@@ -348,6 +396,20 @@ async function directGetAppInitData(identifier, targetBarberId, isFullLoad = fal
     result.services = allServices;
     result.barberAppointments = barberAppointments;
     result.italianHolidays = holidays;
+
+    // Controllo automatico in background per assicurare la copertura festività per anno corrente e prossimo
+    if (typeof directEnsureHolidaysCovered === 'function') {
+      directEnsureHolidaysCovered().catch(err => {
+        console.warn("[Holidays] Auto-check festività in background:", err);
+      });
+    }
+
+    // Controllo e ricarica automatica in background degli appuntamenti settimanali (weeklyRefillWeeks)
+    if (typeof directEnsureWeeklyRefill === 'function') {
+      directEnsureWeeklyRefill().catch(err => {
+        console.warn("[Weekly Refill] Auto-refill settimanali in background:", err);
+      });
+    }
   }
 
   if (identifier) {
@@ -414,9 +476,69 @@ async function directProcessBooking(arg1, arg2, arg3, arg4, arg5, arg6) {
     throw new Error(`Data prenotazione non valida: ${slotIso}`);
   }
 
-  const bookingId = 'bk_' + Date.now();
+  // 4.1 Controllo maxFutureBookings e concorrenza slot
+  const [settings, allExistingBookings] = await Promise.all([
+    directGetSettings(),
+    fetchCollectionDocs('bookings')
+  ]);
+
+  const maxFutureBookings = parseInt(settings.MAX_FUTURE_BOOKINGS ?? settings.maxFutureBookings ?? 3, 10) || 3;
+  const nowMs = Date.now();
+  const cEmail = (clientData.email || '').toLowerCase().trim();
+  const cPhone = String(clientData.phone || clientData.telefono || '').replace(/\D/g, '');
+  const cId = String(clientData.clientId || clientData.id || '').toLowerCase().trim();
+
+  const userActiveFutureCount = allExistingBookings.filter(b => {
+    const st = (b.status || '').toLowerCase().trim();
+    if (st !== 'confermato' && st !== 'richiesta cancellazione' && st !== 'weekly') return false;
+    const bEmail = (b.clientEmail || '').toLowerCase().trim();
+    const bPhone = String(b.clientPhone || '').replace(/\D/g, '');
+    const bId = String(b.clientId || '').toLowerCase().trim();
+    const isThisClient = (bEmail && cEmail && bEmail === cEmail) ||
+                         (bPhone && cPhone && bPhone === cPhone) ||
+                         (bId && cId && bId === cId);
+    if (!isThisClient) return false;
+    const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+    if (!bIso) return false;
+    return new Date(bIso).getTime() >= nowMs;
+  }).length;
+
+  if (userActiveFutureCount >= maxFutureBookings) {
+    return {
+      status: "MAX_BOOKINGS_REACHED",
+      message: `Hai già raggiunto il limite massimo di ${maxFutureBookings} prenotazioni attive.`
+    };
+  }
+
+  // Controllo slot occupato da altri
+  const startMs = startDate.getTime();
+  const endMs = startMs + durationMinutes * 60000;
+  const isOccupied = allExistingBookings.some(b => {
+    if (String(b.barberId || '').trim() !== String(barberId).trim()) return false;
+    const st = (b.status || '').toLowerCase().trim();
+    if (st !== 'confermato' && st !== 'richiesta cancellazione' && st !== 'weekly' && st !== 'indisponibile') return false;
+    const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+    if (!bIso) return false;
+    const bStart = new Date(bIso).getTime();
+    const bDur = (parseInt(b.duration, 10) || 30) * 60000;
+    const bEnd = bStart + bDur;
+    return (startMs < bEnd && endMs > bStart);
+  });
+
+  if (isOccupied) {
+    return {
+      status: "SLOT_OCCUPIED",
+      message: "Questo orario è stato appena prenotato da un altro cliente."
+    };
+  }
+
   const clientNameStr = `${clientData.name || clientData.nome || ''} ${clientData.surname || clientData.cognome || ''}`.trim() || clientData.clientName || 'Cliente';
   const clientIdStr = String(clientData.clientId || clientData.id || clientData.telefono || clientData.email || 'cl_1');
+
+  let bookingId = buildBookingId(startDate, clientNameStr, false);
+  if (allExistingBookings.some(b => (b.id === bookingId || b.bookingId === bookingId))) {
+    bookingId += `_${Date.now().toString().slice(-4)}`;
+  }
 
   const newDoc = {
     barberId: barberId,
@@ -482,13 +604,50 @@ async function directCancelAppointment(bookingId, cancellationReason = '') {
 
   console.log(`[Firebase Direct] Appuntamento ${bookingId} eliminato definitivamente da Firestore`);
 
-  if (bookingData && typeof directSendEmailNotification === 'function') {
-    const cancelPayload = {
-      booking: bookingData,
-      reason: cancellationReason || bookingData.cancellationReason || ''
-    };
-    directSendEmailNotification('bookingCancellation', cancelPayload);
-    directSendEmailNotification('barberCancellationNotification', cancelPayload);
+  if (bookingData) {
+    // Se l'email del cliente non è salvata nella prenotazione (es. istanza settimanale), recuperala dal cliente
+    if (!bookingData.clientEmail && (bookingData.clientId || bookingData.clientPhone)) {
+      try {
+        if (bookingData.clientId) {
+          const clientSnap = await store.collection('clients').doc(String(bookingData.clientId)).get();
+          if (clientSnap.exists) {
+            const cd = clientSnap.data();
+            bookingData.clientEmail = cd.email || cd.clientEmail || '';
+            if (!bookingData.clientName) bookingData.clientName = `${cd.nome || cd.name || ''} ${cd.cognome || cd.surname || ''}`.trim();
+            if (!bookingData.clientPhone) bookingData.clientPhone = cd.telefono || cd.phone || '';
+          }
+        }
+        if (!bookingData.clientEmail && typeof directGetClientsList === 'function') {
+          const allClients = await directGetClientsList();
+          const p = (typeof normalizePhone === 'function') ? normalizePhone(bookingData.clientPhone || '') : String(bookingData.clientPhone || '').replace(/\D/g, '');
+          const found = allClients.find(c => {
+            const cp = (typeof normalizePhone === 'function') ? normalizePhone(c.telefono || c.phone || '') : String(c.telefono || c.phone || '').replace(/\D/g, '');
+            return (bookingData.clientId && String(c.id || c.clientId) === String(bookingData.clientId)) ||
+                   (p && cp === p);
+          });
+          if (found && found.email) {
+            bookingData.clientEmail = found.email;
+          }
+        }
+      } catch (errCl) {
+        console.warn('[Firebase Direct] Impossibile recuperare email cliente per notifica cancellazione:', errCl);
+      }
+    }
+
+    if (typeof directSendEmailNotification === 'function') {
+      const cancelPayload = {
+        booking: bookingData,
+        clientEmail: bookingData.clientEmail || '',
+        clientName: bookingData.clientName || '',
+        clientPhone: bookingData.clientPhone || '',
+        barberId: bookingData.barberId || '',
+        serviceName: bookingData.service || '',
+        startDate: bookingData.startISO || bookingData.start || null,
+        reason: cancellationReason || bookingData.cancellationReason || ''
+      };
+      directSendEmailNotification('bookingCancellation', cancelPayload);
+      directSendEmailNotification('barberCancellationNotification', cancelPayload);
+    }
   }
 
   return { status: 'OK' };
@@ -606,13 +765,46 @@ async function directHandleCancellationDecision(bookingId, decision) {
   if (decision === 'approve') {
     await store.collection('bookings').doc(String(bookingId)).delete();
     console.log(`[Firebase Direct] Appuntamento ${bookingId} eliminato definitivamente da Firestore (approvato dal barbiere)`);
-    if (bookingData && typeof directSendEmailNotification === 'function') {
-      const appPayload = {
-        booking: bookingData,
-        reason: bookingData.cancellationReason || 'Cancellazione approvata dal barbiere'
-      };
-      directSendEmailNotification('bookingCancellation', appPayload);
-      directSendEmailNotification('barberCancellationNotification', appPayload);
+    if (bookingData) {
+      if (!bookingData.clientEmail && (bookingData.clientId || bookingData.clientPhone)) {
+        try {
+          if (bookingData.clientId) {
+            const clientSnap = await store.collection('clients').doc(String(bookingData.clientId)).get();
+            if (clientSnap.exists) {
+              const cd = clientSnap.data();
+              bookingData.clientEmail = cd.email || cd.clientEmail || '';
+              if (!bookingData.clientName) bookingData.clientName = `${cd.nome || cd.name || ''} ${cd.cognome || cd.surname || ''}`.trim();
+              if (!bookingData.clientPhone) bookingData.clientPhone = cd.telefono || cd.phone || '';
+            }
+          }
+          if (!bookingData.clientEmail && typeof directGetClientsList === 'function') {
+            const allClients = await directGetClientsList();
+            const p = (typeof normalizePhone === 'function') ? normalizePhone(bookingData.clientPhone || '') : String(bookingData.clientPhone || '').replace(/\D/g, '');
+            const found = allClients.find(c => {
+              const cp = (typeof normalizePhone === 'function') ? normalizePhone(c.telefono || c.phone || '') : String(c.telefono || c.phone || '').replace(/\D/g, '');
+              return (bookingData.clientId && String(c.id || c.clientId) === String(bookingData.clientId)) ||
+                     (p && cp === p);
+            });
+            if (found && found.email) {
+              bookingData.clientEmail = found.email;
+            }
+          }
+        } catch (e) {}
+      }
+      if (typeof directSendEmailNotification === 'function') {
+        const appPayload = {
+          booking: bookingData,
+          clientEmail: bookingData.clientEmail || '',
+          clientName: bookingData.clientName || '',
+          clientPhone: bookingData.clientPhone || '',
+          barberId: bookingData.barberId || '',
+          serviceName: bookingData.service || '',
+          startDate: bookingData.startISO || bookingData.start || null,
+          reason: bookingData.cancellationReason || 'Cancellazione approvata dal barbiere'
+        };
+        directSendEmailNotification('bookingCancellation', appPayload);
+        directSendEmailNotification('barberCancellationNotification', appPayload);
+      }
     }
   } else {
     await store.collection('bookings').doc(String(bookingId)).update({
@@ -620,12 +812,31 @@ async function directHandleCancellationDecision(bookingId, decision) {
       cancellationReason: ''
     });
     console.log(`[Firebase Direct] Appuntamento ${bookingId} riconfermato su Firestore`);
-    if (bookingData && typeof directSendEmailNotification === 'function') {
-      const rejPayload = {
-        booking: bookingData
-      };
-      directSendEmailNotification('reconfirmation', rejPayload);
-      directSendEmailNotification('barberReconfirmation', rejPayload);
+    if (bookingData) {
+      if (!bookingData.clientEmail && (bookingData.clientId || bookingData.clientPhone)) {
+        try {
+          if (bookingData.clientId) {
+            const clientSnap = await store.collection('clients').doc(String(bookingData.clientId)).get();
+            if (clientSnap.exists) {
+              const cd = clientSnap.data();
+              bookingData.clientEmail = cd.email || cd.clientEmail || '';
+            }
+          }
+        } catch (e) {}
+      }
+      if (typeof directSendEmailNotification === 'function') {
+        const rejPayload = {
+          booking: bookingData,
+          clientEmail: bookingData.clientEmail || '',
+          clientName: bookingData.clientName || '',
+          clientPhone: bookingData.clientPhone || '',
+          barberId: bookingData.barberId || '',
+          serviceName: bookingData.service || '',
+          startDate: bookingData.startISO || bookingData.start || null
+        };
+        directSendEmailNotification('reconfirmation', rejPayload);
+        directSendEmailNotification('barberReconfirmation', rejPayload);
+      }
     }
   }
 
@@ -657,8 +868,25 @@ async function directUpdateAppointment(bookingId, newStartIso, newEndIso, servic
   if (serviceName) updateData.service = serviceName;
   if (barberId) updateData.barberId = barberId;
 
-  await store.collection('bookings').doc(bookingId).update(updateData);
-  console.log(`[Firebase Direct] Appuntamento ${bookingId} aggiornato con successo su Firestore`);
+  const isWeekly = (oldBookingData?.status || '').toLowerCase() === 'weekly' || bookingId.includes('_wk_');
+  const clientName = oldBookingData?.clientName || 'Cliente';
+  const newBookingId = buildBookingId(startD, clientName, isWeekly);
+
+  if (newBookingId !== bookingId) {
+    const batch = store.batch();
+    const updatedDoc = {
+      ...(oldBookingData || {}),
+      ...updateData,
+      bookingId: newBookingId
+    };
+    batch.set(store.collection('bookings').doc(newBookingId), updatedDoc);
+    batch.delete(store.collection('bookings').doc(bookingId));
+    await batch.commit();
+    console.log(`[Firebase Direct] Appuntamento migrato da ${bookingId} a ${newBookingId}`);
+  } else {
+    await store.collection('bookings').doc(bookingId).update(updateData);
+    console.log(`[Firebase Direct] Appuntamento ${bookingId} aggiornato con successo su Firestore`);
+  }
 
   if (oldBookingData && typeof directSendEmailNotification === 'function') {
     const modPayload = {
@@ -678,23 +906,98 @@ async function directUpdateAppointment(bookingId, newStartIso, newEndIso, servic
 }
 
 /**
+ * Trova il miglior orario alternativo libero per una specifica giornata in conflitto
+ */
+function findBestAlternativeSlotForDay(targetDate, barberId, duration, activeBookings, workingHours, targetHours, targetMinutes, serviceName = 'Taglio') {
+  const daysOfWeek = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+  const dayName = daysOfWeek[targetDate.getDay()];
+  const barberHours = (workingHours && workingHours[barberId]) ? workingHours[barberId] : [];
+  const config = barberHours.find(row => row[1] && row[1].toLowerCase() === dayName);
+  if (!config) return null;
+
+  const openAM = typeof parseTimeString === 'function' ? parseTimeString(config[2]) : null;
+  const closeAM = typeof parseTimeString === 'function' ? parseTimeString(config[3]) : null;
+  const openPM = typeof parseTimeString === 'function' ? parseTimeString(config[4]) : null;
+  const closePM = typeof parseTimeString === 'function' ? parseTimeString(config[5]) : null;
+
+  const shifts = [];
+  if (openAM && closeAM) shifts.push({ start: openAM, end: closeAM });
+  if (openPM && closePM) shifts.push({ start: openPM, end: closePM });
+  if (shifts.length === 0) {
+    const startShift = openAM || openPM;
+    const endShift = closePM || closeAM;
+    if (startShift && endShift) shifts.push({ start: startShift, end: endShift });
+  }
+  if (shifts.length === 0) return null;
+
+  const durMs = (parseInt(duration, 10) || 30) * 60000;
+  const targetTimeMs = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), targetHours, targetMinutes, 0, 0).getTime();
+  const dateKey = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
+
+  const candidates = [];
+  const now = new Date();
+  const stepMs = 15 * 60000; // Scansione a passi di 15 minuti
+
+  for (const shift of shifts) {
+    let pointer = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), shift.start.hours, shift.start.minutes, 0, 0);
+    const shiftEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), shift.end.hours, shift.end.minutes, 0, 0);
+
+    // Se è la giornata odierna, non proporre orari già trascorsi
+    if (pointer < now && targetDate.toDateString() === now.toDateString()) {
+      pointer = new Date(now.getTime() + 10 * 60000);
+      pointer.setMinutes(Math.ceil(pointer.getMinutes() / 15) * 15, 0, 0);
+    }
+
+    while (pointer.getTime() + durMs <= shiftEnd.getTime()) {
+      const pStart = pointer.getTime();
+      const pEnd = pStart + durMs;
+
+      const isOverlap = activeBookings.some(b => pStart < b.end && pEnd > b.start);
+      if (!isOverlap) {
+        const hStr = String(pointer.getHours()).padStart(2, '0');
+        const mStr = String(pointer.getMinutes()).padStart(2, '0');
+        const timeFormatted = `${hStr}:${mStr}`;
+        candidates.push({
+          startMs: pStart,
+          iso: pointer.toISOString(),
+          dateKey: dateKey,
+          time: timeFormatted,
+          formatted: timeFormatted,
+          barberId: barberId,
+          duration: duration,
+          serviceName: serviceName
+        });
+      }
+      pointer = new Date(pointer.getTime() + stepMs);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Ordina i candidati per vicinanza all'orario desiderato
+  candidates.sort((a, b) => Math.abs(a.startMs - targetTimeMs) - Math.abs(b.startMs - targetTimeMs));
+  return candidates[0];
+}
+
+/**
  * Anteprima conflitti per appuntamenti settimanali direttamente su Firestore (< 30ms)
  */
 async function directGetWeeklyConflictsPreview(barberId, dayName, timeStr, duration, serviceName, clientIdentifier) {
-  const [services, clients, bookings] = await Promise.all([
+  const [services, clients, bookings, workingHours] = await Promise.all([
     directGetServices(),
     directGetClientsList(),
-    fetchCollectionDocs('bookings')
+    fetchCollectionDocs('bookings'),
+    directGetWorkingHours()
   ]);
 
   let effectiveDuration = parseInt(duration, 10) || 30;
   const sStandard = services.find(s => (s.name || '').toLowerCase() === "taglio");
   const sNameLower = (serviceName || '').toLowerCase();
 
-  const searchPhone = normalizePhone(clientIdentifier || '');
+  const searchPhone = (typeof normalizePhone === 'function') ? normalizePhone(clientIdentifier || '') : String(clientIdentifier || '').replace(/\D/g, '');
   const searchEmail = (clientIdentifier || '').includes('@') ? clientIdentifier.toLowerCase().trim() : '';
   const clientMatch = clients.find(c =>
-    (searchPhone && normalizePhone(c.telefono || c.phone || '') === searchPhone) ||
+    (searchPhone && (typeof normalizePhone === 'function' ? normalizePhone(c.telefono || c.phone || '') : String(c.telefono || c.phone || '').replace(/\D/g, '')) === searchPhone) ||
     (searchEmail && (c.email || '').toLowerCase().trim() === searchEmail)
   );
 
@@ -707,13 +1010,26 @@ async function directGetWeeklyConflictsPreview(barberId, dayName, timeStr, durat
     effectiveDuration = clientCutTime + parseInt(beardDuration, 10);
   }
 
-  const conflicts = [];
-  const now = new Date();
   const daysOfWeek = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
   const targetDay = daysOfWeek.indexOf((dayName || '').toLowerCase().trim());
   if (targetDay === -1) return { conflicts: [] };
 
   const [tHours, tMinutes] = (timeStr || '10:00').split(':').map(Number);
+  const now = new Date();
+
+  // Calcola esattamente le 4 prossime date future per questo giorno e orario
+  const upcomingOccurrences = [];
+  let d = new Date(now);
+  const diffDays = (targetDay - d.getDay() + 7) % 7;
+  d.setDate(d.getDate() + diffDays);
+  const firstCandidate = new Date(d.getFullYear(), d.getMonth(), d.getDate(), tHours, tMinutes, 0, 0);
+  if (firstCandidate <= now) {
+    d.setDate(d.getDate() + 7);
+  }
+  for (let w = 0; w < 4; w++) {
+    const occ = new Date(d.getFullYear(), d.getMonth(), d.getDate() + (w * 7), tHours, tMinutes, 0, 0);
+    upcomingOccurrences.push(occ);
+  }
 
   const activeBookings = bookings.filter(b => {
     const st = (b.status || '').toLowerCase().trim();
@@ -731,28 +1047,28 @@ async function directGetWeeklyConflictsPreview(barberId, dayName, timeStr, durat
     return !activeBookings.some(b => startMs < b.end && endMs > b.start);
   };
 
-  let allAvailableSlots = null;
+  const conflicts = [];
 
-  for (let w = 0; w < 4; w++) {
-    let date = new Date(now.getTime() + (w * 7 * 86400000));
-    date.setDate(date.getDate() + (targetDay - date.getDay() + 7) % 7);
-    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), tHours, tMinutes, 0, 0);
-    if (start < now) continue;
-
-    const isFree = checkSlotFree(start.getTime(), effectiveDuration);
+  for (const occ of upcomingOccurrences) {
+    const isFree = checkSlotFree(occ.getTime(), effectiveDuration);
     if (!isFree) {
-      if (!allAvailableSlots) {
-        allAvailableSlots = await directGetAvailableSlots(effectiveDuration, serviceName, clientMatch ? clientMatch.email : '');
-      }
-      const dateKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
-      const daySlots = (allAvailableSlots || []).filter(s => s.dateKey === dateKey && String(s.barberId) === String(barberId));
-      let closestSlot = null;
-      if (daySlots.length > 0) {
-        daySlots.sort((a, b) => Math.abs(new Date(a.iso).getTime() - start.getTime()) - Math.abs(new Date(b.iso).getTime() - start.getTime()));
-        closestSlot = daySlots[0];
-      }
-      const dateFormatted = `${dayName.charAt(0).toUpperCase() + dayName.slice(1)} ${start.getDate()}/${start.getMonth() + 1}/${start.getFullYear()}`;
-      conflicts.push({ date: dateFormatted, suggestion: closestSlot });
+      const bestSuggestion = findBestAlternativeSlotForDay(
+        occ,
+        barberId,
+        effectiveDuration,
+        activeBookings,
+        workingHours,
+        tHours,
+        tMinutes,
+        serviceName
+      );
+      const dayPad = String(occ.getDate()).padStart(2, '0');
+      const monthPad = String(occ.getMonth() + 1).padStart(2, '0');
+      const dateFormatted = `${dayName.charAt(0).toUpperCase() + dayName.slice(1)} ${dayPad}/${monthPad}/${occ.getFullYear()}`;
+      conflicts.push({
+        date: dateFormatted,
+        suggestion: bestSuggestion
+      });
     }
   }
 
@@ -772,10 +1088,10 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
     fetchCollectionDocs('bookings')
   ]);
 
-  const searchPhone = normalizePhone(clientIdentifier || '');
+  const searchPhone = (typeof normalizePhone === 'function') ? normalizePhone(clientIdentifier || '') : String(clientIdentifier || '').replace(/\D/g, '');
   const searchEmail = (clientIdentifier || '').includes('@') ? clientIdentifier.toLowerCase().trim() : '';
   const clientRow = clients.find(row =>
-    (searchPhone && normalizePhone(row.telefono || row.phone || '') === searchPhone) ||
+    (searchPhone && (typeof normalizePhone === 'function' ? normalizePhone(row.telefono || row.phone || '') : String(row.telefono || row.phone || '').replace(/\D/g, '')) === searchPhone) ||
     (searchEmail && (row.email || '').toLowerCase().trim() === searchEmail)
   );
 
@@ -799,9 +1115,11 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
     effectiveDuration = clientCutTime + parseInt(beardDuration, 10);
   }
 
-  // Gestione dei suggerimenti accettati
+  // 1. Gestione dei suggerimenti accettati: crea appuntamenti standard di recupero per le giornate in conflitto
   if (Array.isArray(acceptedSuggestions) && acceptedSuggestions.length > 0) {
     const clientDataObj = {
+      id: clientId,
+      clientId: clientId,
       nome: clientRow.nome || clientRow.name,
       cognome: clientRow.cognome || clientRow.surname,
       email: clientEmail,
@@ -809,16 +1127,37 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
     };
     for (const s of acceptedSuggestions) {
       if (s && s.iso) {
-        await directProcessBooking(clientDataObj, s.iso, serviceName, s.duration || effectiveDuration, s.barberId || barberId, false);
+        await directProcessBooking(
+          clientDataObj,
+          s.iso,
+          serviceName,
+          s.duration || effectiveDuration,
+          s.barberId || barberId,
+          "Recupero appuntamento da conflitto fisso"
+        );
       }
     }
   }
 
-  const weeklyBookingId = "wb_" + Date.now();
+  const weeklyBookingId = buildWeeklyRuleId(dayName, timeStr, clientName);
   const daysOfWeek = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
   const targetDay = daysOfWeek.indexOf((dayName || '').toLowerCase().trim());
   const [tHours, tMinutes] = (timeStr || '10:00').split(':').map(Number);
   const now = new Date();
+
+  // Calcola esattamente le 4 prossime date future per questo giorno e orario
+  const upcomingOccurrences = [];
+  let d = new Date(now);
+  const diffDays = (targetDay - d.getDay() + 7) % 7;
+  d.setDate(d.getDate() + diffDays);
+  const firstCandidate = new Date(d.getFullYear(), d.getMonth(), d.getDate(), tHours, tMinutes, 0, 0);
+  if (firstCandidate <= now) {
+    d.setDate(d.getDate() + 7);
+  }
+  for (let w = 0; w < 4; w++) {
+    const occ = new Date(d.getFullYear(), d.getMonth(), d.getDate() + (w * 7), tHours, tMinutes, 0, 0);
+    upcomingOccurrences.push(occ);
+  }
 
   let firstOccDate = null;
   const skippedDates = [];
@@ -841,16 +1180,14 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
 
   const batch = store.batch();
 
-  // Genera 4 settimane di istanze
-  for (let w = 0; w < 4; w++) {
-    let date = new Date(now.getTime() + (w * 7 * 86400000));
-    date.setDate(date.getDate() + (targetDay - date.getDay() + 7) % 7);
-    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), tHours, tMinutes, 0, 0);
-    if (start < now) continue;
-
+  // 2. Genera le 4 settimane di istanze settimanali
+  upcomingOccurrences.forEach((start, idx) => {
     if (checkSlotFree(start.getTime(), effectiveDuration)) {
       if (!firstOccDate) firstOccDate = start;
-      const bDocId = "bk_wk_" + Date.now() + "_" + w;
+      let bDocId = buildBookingId(start, clientName, true);
+      if (activeBookings.some(b => b.id === bDocId || b.bookingId === bDocId)) {
+        bDocId += `_${idx}`;
+      }
       const bRef = store.collection('bookings').doc(bDocId);
       batch.set(bRef, {
         barberId: String(barberId),
@@ -859,6 +1196,7 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
         clientId: String(clientId),
         clientName: clientName,
         clientPhone: clientPhone,
+        clientEmail: clientEmail,
         duration: parseInt(effectiveDuration, 10),
         prenotationISO: firebase.firestore.Timestamp.now(),
         reminderSent: false,
@@ -871,22 +1209,29 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
         end: start.getTime() + effectiveDuration * 60000
       });
     } else {
-      skippedDates.push(`${dayName} ${start.getDate()}/${start.getMonth() + 1}`);
+      const sDay = String(start.getDate()).padStart(2, '0');
+      const sMonth = String(start.getMonth() + 1).padStart(2, '0');
+      skippedDates.push(`${dayName} ${sDay}/${sMonth}`);
     }
-  }
+  });
 
-  // Salva il documento della regola weeklyBookings
+  // 3. Salva la regola ricorrente del settimanale su weeklyBookings
   const weeklyRef = store.collection('weeklyBookings').doc(weeklyBookingId);
   batch.set(weeklyRef, {
+    id: weeklyBookingId,
+    bookingId: weeklyBookingId,
     barberId: String(barberId),
     clientId: String(clientId),
     clientName: clientName,
+    clientPhone: clientPhone,
+    clientEmail: clientEmail,
     dayName: (dayName || '').toLowerCase().trim(),
+    time: timeStr,
     duration: parseInt(effectiveDuration, 10),
     eventId: "",
     service: serviceName,
     startDate: firebase.firestore.Timestamp.now(),
-    startISO: firebase.firestore.Timestamp.fromDate(firstOccDate || now),
+    startISO: firebase.firestore.Timestamp.fromDate(firstOccDate || upcomingOccurrences[0]),
     status: "weekly"
   });
 
@@ -894,7 +1239,7 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
   console.log(`[Firebase Direct] Appuntamento settimanale ${weeklyBookingId} salvato con successo.`);
 
   const firstDateFormatted = firstOccDate 
-    ? `Primo appuntamento: ${dayName} ${firstOccDate.getDate()}/${firstOccDate.getMonth() + 1}/${firstOccDate.getFullYear()} ore ${timeStr}`
+    ? `${dayName} ${String(firstOccDate.getDate()).padStart(2, '0')}/${String(firstOccDate.getMonth() + 1).padStart(2, '0')}/${firstOccDate.getFullYear()} ore ${timeStr}`
     : `Ogni ${dayName} alle ore ${timeStr}`;
 
   if (typeof directSendEmailNotification === 'function') {
@@ -1041,5 +1386,124 @@ async function directCleanupOldBookings() {
     }
   } catch (err) {
     console.warn('[Firebase Direct] Errore durante la pulizia degli appuntamenti vecchi:', err);
+  }
+}
+
+/**
+ * Verifica e ricarica automaticamente le occorrenze degli appuntamenti settimanali ricorrenti (weeklyRefillWeeks).
+ * Mantiene sempre coperte le 4 settimane future nel calendario per ogni regola registrata in weeklyBookings.
+ */
+async function directEnsureWeeklyRefill() {
+  try {
+    const store = initFirebaseClient();
+    if (!store) return;
+
+    const [settings, weeklyRules, bookings] = await Promise.all([
+      directGetSettings(),
+      fetchCollectionDocs('weeklyBookings'),
+      fetchCollectionDocs('bookings')
+    ]);
+
+    if (!weeklyRules || weeklyRules.length === 0) return;
+
+    const now = new Date();
+    const refillWeeks = parseInt(settings.WEEKLY_REFILL_WEEKS ?? settings.weeklyRefillWeeks ?? 1, 10) || 1;
+    const targetWeeksAhead = 4; // Finestra mobile standard di 4 settimane
+
+    const DAY_MAP = {
+      'domenica': 0, 'lunedì': 1, 'martedì': 2, 'mercoledì': 3,
+      'giovedì': 4, 'venerdì': 5, 'sabato': 6
+    };
+
+    const batch = store.batch();
+    let createdCount = 0;
+
+    for (const rule of weeklyRules) {
+      if ((rule.status || '').toLowerCase() === 'cancelled') continue;
+
+      const targetDay = DAY_MAP[(rule.dayName || '').toLowerCase().trim()];
+      if (targetDay === undefined) continue;
+
+      const timeParts = (rule.timeStr || '').split(':');
+      if (timeParts.length < 2) continue;
+      const tHours = parseInt(timeParts[0], 10);
+      const tMinutes = parseInt(timeParts[1], 10);
+      const barberId = String(rule.barberId || 'barber_1');
+      const duration = parseInt(rule.duration || 30, 10);
+
+      // Calcola le 4 settimane future
+      let d = new Date(now);
+      const diffDays = (targetDay - d.getDay() + 7) % 7;
+      d.setDate(d.getDate() + diffDays);
+      const firstCandidate = new Date(d.getFullYear(), d.getMonth(), d.getDate(), tHours, tMinutes, 0, 0);
+      if (firstCandidate <= now) {
+        d.setDate(d.getDate() + 7);
+      }
+
+      for (let w = 0; w < targetWeeksAhead; w++) {
+        const occDate = new Date(d.getFullYear(), d.getMonth(), d.getDate() + (w * 7), tHours, tMinutes, 0, 0);
+        const occMs = occDate.getTime();
+        const occEndMs = occMs + duration * 60000;
+
+        // Verifica se esiste già un appuntamento per questo cliente/regola o per questo barbiere in questa data/ora
+        const alreadyHasThisWeekly = bookings.some(b => {
+          const st = (b.status || '').toLowerCase().trim();
+          if (st !== 'weekly') return false;
+          const sIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+          if (!sIso) return false;
+          const bMs = new Date(sIso).getTime();
+          const matchesBarber = String(b.barberId || '').trim() === barberId;
+          const matchesClient = String(b.clientId || '').trim() === String(rule.clientId || '').trim();
+          return matchesBarber && matchesClient && Math.abs(bMs - occMs) < 60000;
+        });
+
+        if (!alreadyHasThisWeekly) {
+          // Verifica se lo slot del barbiere è occupato da altri impegni/appuntamenti
+          const isSlotOccupied = bookings.some(b => {
+            if (String(b.barberId || '').trim() !== barberId) return false;
+            const st = (b.status || '').toLowerCase().trim();
+            if (st !== 'confermato' && st !== 'richiesta cancellazione' && st !== 'weekly' && st !== 'indisponibile') return false;
+            const sIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+            if (!sIso) return false;
+            const bStart = new Date(sIso).getTime();
+            const bEnd = bStart + (parseInt(b.duration, 10) || 30) * 60000;
+            return (occMs < bEnd && occEndMs > bStart);
+          });
+
+          if (!isSlotOccupied) {
+            let bDocId = buildBookingId(occDate, rule.clientName || 'Cliente Settimanale', true);
+            if (bookings.some(b => b.id === bDocId || b.bookingId === bDocId)) {
+              bDocId += `_${createdCount}`;
+            }
+            const bRef = store.collection('bookings').doc(bDocId);
+            batch.set(bRef, {
+              barberId: barberId,
+              bookingId: bDocId,
+              cancellationReason: "",
+              clientId: String(rule.clientId || ''),
+              clientName: rule.clientName || 'Cliente Settimanale',
+              clientPhone: rule.clientPhone || '',
+              clientEmail: rule.clientEmail || '',
+              duration: duration,
+              prenotationISO: firebase.firestore.Timestamp.fromDate(now),
+              reminderSent: false,
+              service: rule.serviceName || 'Taglio',
+              startISO: firebase.firestore.Timestamp.fromDate(occDate),
+              status: "weekly",
+              isWeeklyOccurrence: true,
+              weeklyRuleId: rule.id || rule.bookingId || ''
+            });
+            createdCount++;
+          }
+        }
+      }
+    }
+
+    if (createdCount > 0) {
+      await batch.commit();
+      console.log(`[Firebase Direct] Ricaricati ${createdCount} appuntamenti settimanali ricorrenti (weeklyRefillWeeks: ${refillWeeks}).`);
+    }
+  } catch (e) {
+    console.warn("[Weekly Refill] Errore auto-refill settimanali:", e);
   }
 }

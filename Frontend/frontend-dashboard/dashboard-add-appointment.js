@@ -509,18 +509,22 @@ function handleDashboardFinalBooking() {
       .withSuccessHandler((res) => {
         if (res && res.status === "OK") {
           refreshDashboardData(true); // Aggiorna tutto in background mentre l'utente legge
-          const cNome = addAppState.client.nome || addAppState.client.name || '';
-          const cCognome = addAppState.client.cognome || addAppState.client.surname || '';
+          const cNome = (addAppState.client.nome || addAppState.client.name || '').trim();
+          const cCognome = (addAppState.client.cognome || addAppState.client.surname || '').trim();
+          const clientFullName = `${cNome} ${cCognome}`.trim();
+          const serviceName = (addAppState.service.name || 'Taglio').replace(/_/g, ' ');
+          const formattedDate = (typeof formatFullItalianDate === 'function' ? formatFullItalianDate(addAppState.slot.iso || addAppState.day) : '') || addAppState.slot.formatted;
+
           appContainer.innerHTML = `
             <div class="success-container">
               <div style="margin-bottom: 20px; color: #8A9A5B;">
-                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
               </div>
-              <h2 style="margin-bottom: 20px;">Appuntamento Inserito!</h2>
-              <p style="margin-bottom: 10px;">Per: ${cNome} ${cCognome}</p>
-              <p style="margin-bottom: 2px;">${addAppState.slot.formatted}</p>
-              <p style="margin-bottom: 2px;">Ore ${addAppState.slot.time}</p>
-              <p style="font-size: 0.9em; color: #666; margin-bottom: 10px;">Barbiere: ${addAppState.slot.barberName}</p>
+              <h2 style="margin-bottom: 20px;">Prenotazione Confermata!</h2>
+              ${clientFullName ? `<p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; margin-bottom: 2px;">${clientFullName}</p>` : ''}
+              <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; text-transform: capitalize; margin-bottom: 2px;">${serviceName}</p>
+              <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; margin-bottom: 2px;">${formattedDate}</p>
+              <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; margin-bottom: 2px;">Ore ${addAppState.slot.time}</p>
               <button onclick="renderBarberDashboardPage()" style="background: transparent; color: #8A9A5B; border: none; font-weight: 700; text-transform: uppercase; margin-top: 30px; width: 100%; cursor: pointer; padding: 15px;">Chiudi</button>
             </div>`;
         } else {

@@ -114,6 +114,10 @@ const APP_API_BASE = "";
       if (typeof directManageCustomHoliday !== 'function') return null;
       return await directManageCustomHoliday(...args);
     },
+    'regenerateHolidayClosures': async (args) => {
+      if (typeof directRegenerateHolidayClosures !== 'function') return null;
+      return await directRegenerateHolidayClosures(...args);
+    },
     'saveIndisponibilita': async (args) => {
       if (typeof directSaveIndisponibilitaRange !== 'function') return null;
       return await directSaveIndisponibilitaRange(args[0], args[1], args[1], args[2], args[3], args[4]);
@@ -124,7 +128,7 @@ const APP_API_BASE = "";
     'getAppInitData', 'getDefaultCutTime',
     'getBarbersList', 'getServices', 'manageService', 'verifyBarberPassword',
     'getSettings', 'getWorkingHours', 'saveWorkingHoursAndSettings', 'saveGlobalSettings',
-    'getItalianHolidaysStatus', 'toggleHolidayClosure', 'manageCustomHoliday',
+    'getItalianHolidaysStatus', 'toggleHolidayClosure', 'manageCustomHoliday', 'regenerateHolidayClosures',
     'registerOrUpdateUser', 'updateClientData', 'getClientConfig', 'getClientsList', 'deleteClient',
     'processBooking', 'getUserBookings', 'cancelAppointment', 'updateAppointment',
     'handleCancellationDecision', 'saveIndisponibilita', 'updateIndisponibilita',

@@ -66,7 +66,7 @@ async function directGetSettings() {
   output.MIN_CANCELLATION_HOURS = parseInt(output.MIN_CANCELLATION_HOURS !== undefined ? output.MIN_CANCELLATION_HOURS : (output.minCancellationHours !== undefined ? output.minCancellationHours : 24), 10) || 24;
   output.minCancellationHours = output.MIN_CANCELLATION_HOURS;
 
-  output.AUTO_CANCELLATION_MINUTES = parseInt(output.AUTO_CANCELLATION_MINUTES !== undefined ? output.AUTO_CANCELLATION_MINUTES : (output.autoCancellationMinutes !== undefined ? output.autoCancellationMinutes : 5), 10) || 5;
+  output.AUTO_CANCELLATION_MINUTES = parseInt(output.AUTO_CANCELLATION_MINUTES !== undefined ? output.AUTO_CANCELLATION_MINUTES : (output.autoCancellationMinutes !== undefined ? output.autoCancellationMinutes : 30), 10) || 30;
   output.autoCancellationMinutes = output.AUTO_CANCELLATION_MINUTES;
 
   output.BOOKING_HISTORY = parseInt(output.BOOKING_HISTORY !== undefined ? output.BOOKING_HISTORY : (output.bookingHistory !== undefined ? output.bookingHistory : 15), 10) || 15;
@@ -234,9 +234,9 @@ async function directGetWeeklyBookingsList() {
   return records.map(doc => {
     const sIso = formatTimestampToIso(doc.startISO || doc.startDate);
     const dt = new Date(sIso);
-    const time = !isNaN(dt.getTime())
+    const time = doc.time || (!isNaN(dt.getTime())
       ? `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`
-      : (doc.time || '10:00');
+      : '10:00');
     return {
       id: doc.id || doc.bookingId || '',
       bookingId: doc.id || doc.bookingId || '',
@@ -254,101 +254,198 @@ async function directGetWeeklyBookingsList() {
 }
 
 /**
- * Recupera lo stato delle festività italiane direttamente da Firestore (< 30ms)
+ * Calcola la data della Domenica di Pasqua per qualsiasi anno (Algoritmo Gregoriano Anonimo / Butcher)
  */
-async function directGetItalianHolidaysStatus() {
-  const store = initFirebaseClient();
-  if (!store) return [];
-  try {
-    let docs = await fetchCollectionDocs('holidays');
-    if (!docs || docs.length === 0) {
-      const snap = await store.collection('workingHours').doc('holidays').collection('holidays').get();
-      if (!snap.empty) {
-        docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      }
-    }
-
-    const standardHolidaysDef = [
-      { name: "Capodanno", dateStr: "01/01" },
-      { name: "Epifania", dateStr: "06/01" },
-      { name: "Pasqua", dateStr: "05/04" },
-      { name: "Lunedì dell'Angelo", dateStr: "06/04" },
-      { name: "Liberazione", dateStr: "25/04" },
-      { name: "Festa del Lavoro", dateStr: "01/05" },
-      { name: "Festa della Repubblica", dateStr: "02/06" },
-      { name: "Ferragosto", dateStr: "15/08" },
-      { name: "Ognissanti", dateStr: "01/11" },
-      { name: "Immacolata", dateStr: "08/12" },
-      { name: "Natale", dateStr: "25/12" },
-      { name: "S. Stefano", dateStr: "26/12" }
-    ];
-
-    const currentYear = new Date().getFullYear();
-    const result = [];
-    const seenNames = new Set();
-
-    (docs || []).forEach(doc => {
-      const name = doc.name || doc.holidayName || doc.id || '';
-      if (!name) return;
-      seenNames.add(name);
-      let d = null;
-      if (doc.iso) {
-        d = new Date(doc.iso);
-      } else if (doc.date || doc.dateStr || doc.thisYear) {
-        const rawDate = doc.date || doc.dateStr || doc.thisYear;
-        const parts = String(rawDate).split('/');
-        if (parts.length >= 2) {
-          d = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-        }
-      }
-      const isoStr = d && !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : (doc.iso || `${currentYear}-01-01`);
-      const displayStr = d && !isNaN(d.getTime()) ? d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }) : (doc.display || '');
-      result.push({
-        id: doc.id || name,
-        name: name,
-        iso: isoStr,
-        display: displayStr,
-        isClosed: Boolean(doc.isClosed === true || doc.isClosed === 'true' || doc.isActive === false)
-      });
-    });
-
-    standardHolidaysDef.forEach(sh => {
-      if (!seenNames.has(sh.name)) {
-        const parts = sh.dateStr.split('/');
-        const d = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-        result.push({
-          id: sh.name,
-          name: sh.name,
-          iso: d.toISOString().split('T')[0],
-          display: d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }),
-          isClosed: false
-        });
-      }
-    });
-
-    result.sort((a, b) => (a.iso || '').localeCompare(b.iso || ''));
-    return result;
-  } catch (e) {
-    console.warn("[Firebase Direct] Errore lettura festività da Firestore:", e);
-    return [];
-  }
+function getEasterDate(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31); // 3 = marzo, 4 = aprile
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
 }
 
 /**
- * Gestisce apertura/chiusura per una festività su Firestore (< 30ms)
+ * Restituisce l'elenco delle festività nazionali italiane calcolate direttamente nel codice per l'anno specificato.
+ */
+function getStandardItalianHolidays(year = new Date().getFullYear()) {
+  const easter = getEasterDate(year);
+  const easterMonday = new Date(year, easter.getMonth(), easter.getDate() + 1);
+
+  const formatIso = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const formatDisplay = (d, m) => `${String(d).padStart(2, '0')} ${['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'][m - 1]}`;
+
+  return [
+    { name: "Capodanno", iso: formatIso(year, 1, 1), display: formatDisplay(1, 1), dateStr: "01/01" },
+    { name: "Epifania", iso: formatIso(year, 1, 6), display: formatDisplay(6, 1), dateStr: "06/01" },
+    { name: "Pasqua", iso: formatIso(year, easter.getMonth() + 1, easter.getDate()), display: formatDisplay(easter.getDate(), easter.getMonth() + 1), dateStr: `${String(easter.getDate()).padStart(2, '0')}/${String(easter.getMonth() + 1).padStart(2, '0')}` },
+    { name: "Lunedì dell'Angelo", iso: formatIso(year, easterMonday.getMonth() + 1, easterMonday.getDate()), display: formatDisplay(easterMonday.getDate(), easterMonday.getMonth() + 1), dateStr: `${String(easterMonday.getDate()).padStart(2, '0')}/${String(easterMonday.getMonth() + 1).padStart(2, '0')}` },
+    { name: "Liberazione", iso: formatIso(year, 4, 25), display: formatDisplay(25, 4), dateStr: "25/04" },
+    { name: "Festa del Lavoro", iso: formatIso(year, 5, 1), display: formatDisplay(1, 5), dateStr: "01/05" },
+    { name: "Festa della Repubblica", iso: formatIso(year, 6, 2), display: formatDisplay(2, 6), dateStr: "02/06" },
+    { name: "Ferragosto", iso: formatIso(year, 8, 15), display: formatDisplay(15, 8), dateStr: "15/08" },
+    { name: "Ognissanti", iso: formatIso(year, 11, 1), display: formatDisplay(1, 1), dateStr: "01/11" },
+    { name: "Immacolata", iso: formatIso(year, 12, 8), display: formatDisplay(8, 12), dateStr: "08/12" },
+    { name: "Natale", iso: formatIso(year, 12, 25), display: formatDisplay(25, 12), dateStr: "25/12" },
+    { name: "S. Stefano", iso: formatIso(year, 12, 26), display: formatDisplay(26, 12), dateStr: "26/12" }
+  ];
+}
+
+/**
+ * Recupera o inizializza il documento 'workingHours/holidays' su Firestore.
+ * Contiene 'nationalHolidays' per l'anno in corso e il successivo (con isClosed)
+ * e 'customHolidays' per le ricorrenze del salone (con isClosed).
+ */
+async function getOrInitWorkingHoursHolidays(targetYear) {
+  const store = initFirebaseClient();
+  if (!store) return { nationalHolidays: [], customHolidays: [] };
+
+  const currentYear = targetYear || new Date().getFullYear();
+  const years = [currentYear, currentYear + 1];
+  const docRef = store.collection('workingHours').doc('holidays');
+
+  let docSnap = null;
+  try {
+    docSnap = await docRef.get();
+  } catch (e) {
+    console.warn("[Firebase Direct] Errore lettura workingHours/holidays:", e);
+  }
+
+  const existingData = docSnap && docSnap.exists ? docSnap.data() : null;
+  let nationalHolidays = Array.isArray(existingData?.nationalHolidays) ? existingData.nationalHolidays : [];
+  let customHolidays = Array.isArray(existingData?.customHolidays) ? existingData.customHolidays : [];
+
+  let needsSave = !existingData;
+
+  for (const yr of years) {
+    const hasYr = nationalHolidays.some(h => (h.year === yr || (h.iso || '').startsWith(String(yr))));
+    if (!hasYr) {
+      const generated = getStandardItalianHolidays(yr).map(h => ({
+        name: h.name,
+        iso: h.iso,
+        date: h.iso,
+        display: h.display,
+        dateStr: h.dateStr,
+        year: yr,
+        isClosed: true,
+        isNational: true
+      }));
+      nationalHolidays.push(...generated);
+      needsSave = true;
+    }
+  }
+
+  if (needsSave) {
+    try {
+      await docRef.set({
+        nationalHolidays,
+        customHolidays,
+        lastGeneratedYear: currentYear,
+        updatedAt: firebase.firestore.Timestamp.now()
+      }, { merge: true });
+      console.log("[Firebase Direct] Documento workingHours/holidays salvato/aggiornato con successo su Firestore");
+    } catch (e) {
+      console.warn("[Firebase Direct] Salvataggio workingHours/holidays fallito:", e);
+    }
+  }
+
+  return { nationalHolidays, customHolidays };
+}
+
+/**
+ * Recupera lo stato delle festività italiane e delle ricorrenze leggendole direttamente dal documento 'workingHours/holidays' di Firestore.
+ */
+async function directGetItalianHolidaysStatus(targetYear) {
+  const currentYear = targetYear || new Date().getFullYear();
+  const { nationalHolidays, customHolidays } = await getOrInitWorkingHoursHolidays(currentYear);
+
+  const nationalThisYear = nationalHolidays.filter(h => (h.year === currentYear || (h.iso || '').startsWith(String(currentYear))));
+
+  const customThisYear = customHolidays.map(ch => {
+    const parts = (ch.dateStr || '').split('/');
+    const d = parts.length >= 2 ? new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)) : new Date();
+    const isoStr = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : `${currentYear}-01-01`;
+    return {
+      id: ch.name || ch.id,
+      name: ch.name || ch.id,
+      iso: isoStr,
+      display: `${String(d.getDate()).padStart(2, '0')} ${['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'][d.getMonth()]}`,
+      dateStr: ch.dateStr,
+      isClosed: ch.isClosed !== undefined ? ch.isClosed : true,
+      isNational: false
+    };
+  });
+
+  const all = [...nationalThisYear, ...customThisYear].map(h => ({
+    id: h.name,
+    name: h.name,
+    iso: h.iso || h.date,
+    display: h.display,
+    dateStr: h.dateStr,
+    isClosed: h.isClosed !== undefined ? h.isClosed : true,
+    isNational: h.isNational !== false
+  }));
+
+  all.sort((a, b) => (a.iso || '').localeCompare(b.iso || ''));
+  return all;
+}
+
+/**
+ * Gestisce apertura/chiusura per una festività aggiornando lo stato nel documento 'workingHours/holidays'
+ * e sincronizzando contestualmente le indisponibilità barbiere classiche su bookings (< 30ms).
  */
 async function directToggleHolidayClosure(iso, name, shouldClose, force = false) {
   const store = initFirebaseClient();
   if (!store) throw new Error("Firestore SDK non disponibile");
 
-  const holidayDocRef = store.collection('holidays').doc(name);
-  await holidayDocRef.set({
-    id: name,
-    name: name,
-    iso: iso,
-    isClosed: Boolean(shouldClose)
-  }, { merge: true });
+  // 1. Aggiorna il documento workingHours/holidays
+  const holidaysDocRef = store.collection('workingHours').doc('holidays');
+  try {
+    const docSnap = await holidaysDocRef.get();
+    if (docSnap.exists) {
+      const data = docSnap.data();
+      let updated = false;
 
+      if (Array.isArray(data.nationalHolidays)) {
+        data.nationalHolidays.forEach(h => {
+          if (h.iso === iso || (h.name === name && (h.iso || '').split('T')[0] === iso)) {
+            h.isClosed = Boolean(shouldClose);
+            updated = true;
+          }
+        });
+      }
+
+      if (Array.isArray(data.customHolidays)) {
+        data.customHolidays.forEach(ch => {
+          if (ch.name === name) {
+            ch.isClosed = Boolean(shouldClose);
+            updated = true;
+          }
+        });
+      }
+
+      if (updated) {
+        await holidaysDocRef.set({
+          ...data,
+          updatedAt: firebase.firestore.Timestamp.now()
+        }, { merge: true });
+        console.log(`[Firebase Direct] workingHours/holidays aggiornato: ${name} (${iso}) isClosed=${shouldClose}`);
+      }
+    }
+  } catch (e) {
+    console.warn("[Firebase Direct] Aggiornamento workingHours/holidays fallito:", e);
+  }
+
+  // 2. Sincronizza su bookings
   const barbers = await directGetBarbersList(true);
   const allConflicts = [];
 
@@ -363,14 +460,16 @@ async function directToggleHolidayClosure(iso, name, shouldClose, force = false)
       return { status: "CONFLICT", conflicts: allConflicts };
     }
   } else {
+    // Riapertura: rimuove tutte le indisponibilità associate a quella festività per quella data
     const bookings = await fetchCollectionDocs('bookings');
     const batch = store.batch();
     let count = 0;
     bookings.forEach(b => {
       const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
-      const bDateKey = bIso.split('T')[0];
+      const bDateKey = (bIso || '').split('T')[0];
       const isIndispo = (b.status || '').toLowerCase() === 'indisponibile';
-      const matchHoliday = (b.service || '') === name || (b.clientName || '') === name;
+      const sName = (b.service || b.clientName || '').toLowerCase();
+      const matchHoliday = sName.includes(name.toLowerCase()) || (isIndispo && bDateKey === iso && (parseInt(b.duration, 10) || 0) >= 1400);
       if (isIndispo && bDateKey === iso && matchHoliday) {
         batch.delete(store.collection('bookings').doc(b.id));
         count++;
@@ -386,51 +485,246 @@ async function directToggleHolidayClosure(iso, name, shouldClose, force = false)
 }
 
 /**
- * Gestisce l'aggiunta, modifica ed eliminazione di una festività personalizzata su Firestore (< 30ms)
+ * Rigenera tutte le chiusure per festività memorizzandole in 'workingHours/holidays'
+ * e creando le relative indisponibilità su bookings per l'anno corrente e il prossimo.
+ */
+async function directRegenerateHolidayClosures(targetYears = null, force = true) {
+  const store = initFirebaseClient();
+  if (!store) throw new Error("Firestore SDK non disponibile");
+
+  const currentYear = new Date().getFullYear();
+  const years = Array.isArray(targetYears)
+    ? targetYears
+    : (targetYears ? [targetYears] : [currentYear, currentYear + 1]);
+
+  const barbers = await directGetBarbersList(true);
+  const allBookings = await fetchCollectionDocs('bookings');
+
+  // 1. Inizializza o aggiorna workingHours/holidays
+  const holidaysDocRef = store.collection('workingHours').doc('holidays');
+  let docSnap = null;
+  try {
+    docSnap = await holidaysDocRef.get();
+  } catch (e) {}
+
+  const existingData = docSnap && docSnap.exists ? docSnap.data() : null;
+  let nationalHolidays = Array.isArray(existingData?.nationalHolidays) ? existingData.nationalHolidays : [];
+  let customHolidays = Array.isArray(existingData?.customHolidays) ? existingData.customHolidays : [];
+
+  for (const yr of years) {
+    const hasYr = nationalHolidays.some(h => (h.year === yr || (h.iso || '').startsWith(String(yr))));
+    if (!hasYr) {
+      const generated = getStandardItalianHolidays(yr).map(h => ({
+        name: h.name,
+        iso: h.iso,
+        date: h.iso,
+        display: h.display,
+        dateStr: h.dateStr,
+        year: yr,
+        isClosed: true,
+        isNational: true
+      }));
+      nationalHolidays.push(...generated);
+    }
+  }
+
+  await holidaysDocRef.set({
+    nationalHolidays,
+    customHolidays,
+    lastGeneratedYear: currentYear,
+    updatedAt: firebase.firestore.Timestamp.now()
+  }, { merge: true });
+
+  // 2. Crea le indisponibilità in bookings per tutte le festività con isClosed === true
+  const batch = store.batch();
+  let createdCount = 0;
+
+  for (const yr of years) {
+    const nationalThisYr = nationalHolidays.filter(h => (h.year === yr || (h.iso || '').startsWith(String(yr))));
+    const customThisYr = customHolidays.map(ch => {
+      const parts = (ch.dateStr || '').split('/');
+      const d = parts.length >= 2 ? new Date(yr, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)) : new Date();
+      const isoStr = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : `${yr}-01-01`;
+      return {
+        name: ch.name,
+        iso: isoStr,
+        isClosed: ch.isClosed !== undefined ? ch.isClosed : true
+      };
+    });
+
+    const allToCover = [...nationalThisYr, ...customThisYr].filter(h => h.isClosed !== false);
+
+    for (const h of allToCover) {
+      const hIso = h.iso || h.date;
+      for (const bId in barbers) {
+        const alreadyExists = allBookings.some(b => {
+          if (String(b.barberId || '').trim() !== String(bId).trim()) return false;
+          const st = (b.status || '').toLowerCase().trim();
+          if (st !== 'indisponibile') return false;
+          const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+          return (bIso || '').split('T')[0] === hIso;
+        });
+
+        if (!alreadyExists) {
+          const cleanName = h.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+          const indispoId = `indispo_festivita_${cleanName}_${yr}_${bId}`;
+          const ref = store.collection('bookings').doc(indispoId);
+          const startDateTime = new Date(`${hIso}T00:00:00`);
+          const indispoDoc = {
+            barberId: String(bId),
+            bookingId: indispoId,
+            clientId: 'indisponibilita',
+            clientName: h.name,
+            service: h.name,
+            duration: 1440,
+            startISO: firebase.firestore.Timestamp.fromDate(startDateTime),
+            status: 'indisponibile',
+            prenotationISO: firebase.firestore.Timestamp.fromDate(new Date()),
+            cancellationReason: '',
+            reminderSent: false,
+            isHoliday: true
+          };
+          batch.set(ref, indispoDoc);
+          createdCount++;
+        }
+      }
+    }
+  }
+
+  if (createdCount > 0) {
+    await batch.commit();
+    console.log(`[Firebase Direct] Rigenerate ${createdCount} indisponibilità per festività degli anni ${years.join(', ')}`);
+  }
+
+  return {
+    status: "OK",
+    created: createdCount,
+    holidays: await directGetItalianHolidaysStatus(currentYear)
+  };
+}
+
+/**
+ * Verifica in background che 'workingHours/holidays' sia presente e che le indisponibilità siano coperte per l'anno in corso e il successivo.
+ */
+async function directEnsureHolidaysCovered() {
+  const currentYear = new Date().getFullYear();
+  const store = initFirebaseClient();
+  if (!store) return;
+
+  try {
+    const docSnap = await store.collection('workingHours').doc('holidays').get();
+    if (!docSnap.exists) {
+      console.log("[Firebase Direct] workingHours/holidays mancante. Inizializzazione automatica in corso...");
+      await directRegenerateHolidayClosures([currentYear, currentYear + 1], true);
+      return;
+    }
+
+    const data = docSnap.data();
+    const nat = Array.isArray(data.nationalHolidays) ? data.nationalHolidays : [];
+    const hasCur = nat.some(h => (h.year === currentYear || (h.iso || '').startsWith(String(currentYear))));
+    const hasNext = nat.some(h => (h.year === currentYear + 1 || (h.iso || '').startsWith(String(currentYear + 1))));
+
+    if (!hasCur || !hasNext) {
+      console.log("[Firebase Direct] workingHours/holidays da estendere al nuovo anno. Aggiornamento in corso...");
+      await directRegenerateHolidayClosures([currentYear, currentYear + 1], true);
+      return;
+    }
+
+    // Controllo rapido campione su bookings per assicurarsi che i blocchi ci siano
+    const bookings = await fetchCollectionDocs('bookings');
+    const testDate = `${currentYear}-12-25`;
+    const hasSample = bookings.some(b => {
+      const st = (b.status || '').toLowerCase().trim();
+      if (st !== 'indisponibile') return false;
+      const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
+      return (bIso || '').split('T')[0] === testDate;
+    });
+
+    if (!hasSample) {
+      await directRegenerateHolidayClosures([currentYear, currentYear + 1], true);
+    }
+  } catch (e) {
+    console.warn("[Firebase Direct] Controllo festività fallito:", e);
+  }
+}
+
+/**
+ * Gestisce l'aggiunta, modifica ed eliminazione di una ricorrenza personalizzata all'interno del documento 'workingHours/holidays'.
  */
 async function directManageCustomHoliday(action, holidayData) {
   const store = initFirebaseClient();
   if (!store) throw new Error("Firestore SDK non disponibile");
 
-  const fullName = `${holidayData.name} (${holidayData.dateStr})`;
+  const holidaysDocRef = store.collection('workingHours').doc('holidays');
+  let docSnap = null;
+  try {
+    docSnap = await holidaysDocRef.get();
+  } catch (e) {}
+
+  const data = (docSnap && docSnap.exists && docSnap.data()) ? docSnap.data() : { nationalHolidays: [], customHolidays: [] };
+  let list = Array.isArray(data.customHolidays) ? data.customHolidays : [];
+
+  const fullName = holidayData.name.includes(`(${holidayData.dateStr})`) 
+    ? holidayData.name 
+    : `${holidayData.name} (${holidayData.dateStr})`;
+
   const currentYear = new Date().getFullYear();
+  const parts = (holidayData.dateStr || '').split('/');
 
   if (action === 'add') {
-    const parts = (holidayData.dateStr || '').split('/');
-    const d = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-    const isoStr = d.toISOString().split('T')[0];
-    await store.collection('holidays').doc(fullName).set({
+    list = list.filter(h => h.name !== fullName);
+    list.push({
       id: fullName,
       name: fullName,
-      iso: isoStr,
-      display: d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }),
-      isClosed: false
+      dateStr: holidayData.dateStr,
+      isClosed: true
     });
+    await holidaysDocRef.set({ ...data, customHolidays: list, updatedAt: firebase.firestore.Timestamp.now() }, { merge: true });
+
+    // Genera immediatamente indisponibilità per tutti i barbieri sia per l'anno corrente che per il prossimo
+    const barbers = await directGetBarbersList(true);
+    const years = [currentYear, currentYear + 1];
+    for (const yr of years) {
+      const dYr = parts.length >= 2 ? new Date(yr, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)) : new Date();
+      const isoYr = !isNaN(dYr.getTime()) ? dYr.toISOString().split('T')[0] : `${yr}-01-01`;
+      for (const bId in barbers) {
+        await directSaveIndisponibilitaRange(bId, isoYr, isoYr, "00:00", "23:59", fullName, true);
+      }
+    }
     return { status: "OK", holidays: await directGetItalianHolidaysStatus() };
   }
 
   if (action === 'edit') {
     const oldTarget = holidayData.oldName || holidayData.name;
-    const parts = (holidayData.dateStr || '').split('/');
-    const d = new Date(currentYear, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-    const isoStr = d.toISOString().split('T')[0];
-
-    if (oldTarget !== fullName) {
-      await store.collection('holidays').doc(oldTarget).delete();
-    }
-    await store.collection('holidays').doc(fullName).set({
+    list = list.filter(h => h.name !== oldTarget && h.id !== oldTarget);
+    list.push({
       id: fullName,
       name: fullName,
-      iso: isoStr,
-      display: d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }),
-      isClosed: false
+      dateStr: holidayData.dateStr,
+      isClosed: true
     });
+    await holidaysDocRef.set({ ...data, customHolidays: list, updatedAt: firebase.firestore.Timestamp.now() }, { merge: true });
     return { status: "OK", holidays: await directGetItalianHolidaysStatus() };
   }
 
   if (action === 'delete') {
     const target = holidayData.name;
-    await store.collection('holidays').doc(target).delete();
+    list = list.filter(h => h.name !== target && h.id !== target);
+    await holidaysDocRef.set({ ...data, customHolidays: list, updatedAt: firebase.firestore.Timestamp.now() }, { merge: true });
+
+    // Rimuove eventuali indisponibilità associate da bookings
+    const bookings = await fetchCollectionDocs('bookings');
+    const batch = store.batch();
+    let count = 0;
+    bookings.forEach(b => {
+      const isIndispo = (b.status || '').toLowerCase() === 'indisponibile';
+      const sName = (b.service || b.clientName || '').toLowerCase();
+      if (isIndispo && sName.includes(target.toLowerCase())) {
+        batch.delete(store.collection('bookings').doc(b.id));
+        count++;
+      }
+    });
+    if (count > 0) await batch.commit();
     return { status: "OK", holidays: await directGetItalianHolidaysStatus() };
   }
 

@@ -153,7 +153,7 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
 
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Minuti dopo la prenotazione per annullare autonomamente l'appuntamento</label>
-                                <input type="number" id="set-AUTO_CANCELLATION_MINUTES" value="${settings.AUTO_CANCELLATION_MINUTES ?? settings.autoCancellationMinutes ?? 5}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
+                                <input type="number" id="set-AUTO_CANCELLATION_MINUTES" value="${settings.AUTO_CANCELLATION_MINUTES ?? settings.autoCancellationMinutes ?? 30}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)">
                             </div>
 
                             <div style="text-align: left; width: 100%;">
@@ -169,6 +169,16 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                             <div style="text-align: left; width: 100%;">
                                 <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Giorni di storico appuntamenti passati visibili</label>
                                 <input type="number" id="set-BOOKING_HISTORY" value="${settings.BOOKING_HISTORY ?? settings.bookingHistory ?? 15}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
+                            </div>
+
+                            <div style="text-align: left; width: 100%;">
+                                <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Numero massimo di prenotazioni future per cliente</label>
+                                <input type="number" id="set-MAX_FUTURE_BOOKINGS" min="1" value="${settings.MAX_FUTURE_BOOKINGS ?? settings.maxFutureBookings ?? 3}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
+                            </div>
+
+                            <div style="text-align: left; width: 100%;">
+                                <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Settimane di anticipo ricarica appuntamenti settimanali</label>
+                                <input type="number" id="set-WEEKLY_REFILL_WEEKS" min="1" value="${settings.WEEKLY_REFILL_WEEKS ?? settings.weeklyRefillWeeks ?? 1}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
                             </div>
                         </div>
                     </div>
@@ -220,7 +230,8 @@ function getCurrentSettingsState() {
     const settingsKeys = [
         'BUSINESS_NAME', 'BUSINESS_ADDRESS', 'CONTACT_PHONE', 'CONTACT_EMAIL',
         'MIN_CANCELLATION_HOURS', 'AUTO_CANCELLATION_MINUTES', 'BOOKING_WINDOW_DAYS', 
-        'BOOKING_HISTORY', 'REMINDER_NOTIFICATION_TIME', 'MIN_BOOKINGS_DAYS'
+        'BOOKING_HISTORY', 'REMINDER_NOTIFICATION_TIME', 'MIN_BOOKINGS_DAYS',
+        'MAX_FUTURE_BOOKINGS', 'WEEKLY_REFILL_WEEKS'
     ];
     settingsKeys.forEach(key => {
         const el = document.getElementById('set-' + key);
@@ -265,7 +276,8 @@ function saveAllSettings(btn = null) {
     const settingsKeys = [
         'BUSINESS_NAME', 'BUSINESS_ADDRESS', 'CONTACT_PHONE', 'CONTACT_EMAIL',
         'MIN_CANCELLATION_HOURS', 'AUTO_CANCELLATION_MINUTES', 'BOOKING_WINDOW_DAYS', 
-        'BOOKING_HISTORY', 'REMINDER_NOTIFICATION_TIME', 'MIN_BOOKINGS_DAYS'
+        'BOOKING_HISTORY', 'REMINDER_NOTIFICATION_TIME', 'MIN_BOOKINGS_DAYS',
+        'MAX_FUTURE_BOOKINGS', 'WEEKLY_REFILL_WEEKS'
     ];
     
     const settingsData = {};

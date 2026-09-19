@@ -385,7 +385,7 @@ function handleWeeklyFinalSave() {
       .withSuccessHandler(res => {
           // Non nascondiamo lo spinner qui se procediamo al salvataggio,
           // altrimenti lo nascondiamo prima di mostrare il popup dei conflitti.
-          if (res.conflicts && res.conflicts.length > 0) {
+          if (res && res.conflicts && res.conflicts.length > 0) {
               if (btn) hideButtonSpinner(btn);
               showWeeklyConflictResolutionPopup(res.conflicts);
           } else {
@@ -477,28 +477,37 @@ function executeWeeklySave(acceptedSuggestions) {
           const conflictPopup = document.getElementById('weekly-conflict-overlay');
           if (conflictPopup) conflictPopup.remove();
 
+          const cNome = (weeklyAppState.client.nome || weeklyAppState.client.name || '').trim();
+          const cCognome = (weeklyAppState.client.cognome || weeklyAppState.client.surname || '').trim();
+          const clientFullName = `${cNome} ${cCognome}`.trim();
+          const serviceName = (weeklyAppState.service.name || 'Taglio').replace(/_/g, ' ');
+          const dayFormatted = weeklyAppState.day.charAt(0).toUpperCase() + weeklyAppState.day.slice(1);
+
           let firstDateHtml = "";
           if (res.firstDate) {
-            firstDateHtml = `<p style="margin: 0; color: #666; font-weight: 600; font-size: 1em; text-align: center;">${res.firstDate}</p>`;
+            let cleanFirstDate = String(res.firstDate).replace(/^Primo appuntamento:\s*/i, '').trim();
+            if (typeof formatSlashDate2Digits === 'function') {
+              cleanFirstDate = formatSlashDate2Digits(cleanFirstDate);
+            } else {
+              cleanFirstDate = cleanFirstDate.replace(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\b/g, (_, d, m, y) => y ? `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}` : `${d.padStart(2, '0')}/${m.padStart(2, '0')}`);
+            }
+            firstDateHtml = `<p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; margin-bottom: 2px;">Prima seduta: ${cleanFirstDate}</p>`;
           }
 
-          appContainer.innerHTML = `
-            <div class="full-screen" style="justify-content: center;">
-                <div class="success-container">
-                    <div style="margin-bottom: 20px; color: #8A9A5B;">
-                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-                    </div>
-                    <h2 style="margin-bottom: 20px;">Appuntamento Fisso Salvato!</h2>
-                    <p style="margin-bottom: 10px;">Per: ${weeklyAppState.client.nome} ${weeklyAppState.client.cognome}</p>
-                    <p style="margin-bottom: 2px;">Ogni ${weeklyAppState.day} alle ore ${weeklyAppState.slot.time}</p>
-                    ${firstDateHtml}
-                    
-                    ${res.updatedWeekly ? (cachedAppData.weeklyBookings = res.updatedWeekly, '') : ''}
-                    ${res.updatedAppointments ? (cachedBarberAppointments = res.updatedAppointments, '') : ''}
+          if (res.updatedWeekly) cachedAppData.weeklyBookings = res.updatedWeekly;
+          if (res.updatedAppointments) cachedBarberAppointments = res.updatedAppointments;
 
-                    <p style="font-size:0.9em; color:#666; margin-top:20px;">Il cliente riceverà una mail di conferma.</p>
-                    <button onclick="renderBarberWeeklyAppointmentsListPage()" style="background: transparent; color: #8A9A5B; border: none; font-weight: 700; text-transform: uppercase; margin-top: 30px; width: 100%; cursor: pointer; padding: 15px;">Chiudi</button>
-                </div>
+          appContainer.innerHTML = `
+            <div class="success-container">
+              <div style="margin-bottom: 20px; color: #8A9A5B;">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              </div>
+              <h2 style="margin-bottom: 20px;">Prenotazione Confermata!</h2>
+              ${clientFullName ? `<p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; margin-bottom: 2px;">${clientFullName}</p>` : ''}
+              <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; text-transform: capitalize; margin-bottom: 2px;">${serviceName}</p>
+              <p style="font-weight: bold; font-size: 1.25em; color: #1a1a1a; margin-bottom: 2px;">Ogni ${dayFormatted} ore ${weeklyAppState.slot.time}</p>
+              ${firstDateHtml}
+              <button onclick="renderBarberWeeklyAppointmentsListPage()" style="background: transparent; color: #8A9A5B; border: none; font-weight: 700; text-transform: uppercase; margin-top: 30px; width: 100%; cursor: pointer; padding: 15px;">Chiudi</button>
             </div>`;
         } else {
           showCustomAlert("Errore", (res && res.message) ? res.message : "Errore sconosciuto durante il salvataggio.");

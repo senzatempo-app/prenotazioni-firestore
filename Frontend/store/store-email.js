@@ -48,7 +48,7 @@ function formatEmailDateItalian(dateInput, includeTime = true) {
   const months = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
 
   const dayName = days[d.getDay()];
-  const dayNum = d.getDate();
+  const dayNum = String(d.getDate()).padStart(2, '0');
   const monthName = months[d.getMonth()];
   const year = d.getFullYear();
   const hours = String(d.getHours()).padStart(2, '0');
@@ -270,11 +270,43 @@ async function directSendEmailNotification(type, payload = {}) {
 
       // Risoluzione dati cliente
       const clientData = payload.clientData || {};
-      const clientNameFull = payload.clientName || clientData.nome || payload.booking?.clientName || 'Cliente';
-      const clientFirstName = (clientNameFull || '').split(' ')[0] || 'Cliente';
-      const clientLastName = clientData.cognome || (clientNameFull.split(' ').slice(1).join(' ')) || '';
-      const clientPhone = clientData.telefono || clientData.phone || payload.booking?.clientPhone || 'N/D';
-      const clientEmail = (payload.clientEmail || clientData.email || payload.booking?.clientEmail || '').trim();
+      let clientNameFull = payload.clientName || clientData.nome || payload.booking?.clientName || 'Cliente';
+      let clientFirstName = (clientNameFull || '').split(' ')[0] || 'Cliente';
+      let clientLastName = clientData.cognome || (clientNameFull.split(' ').slice(1).join(' ')) || '';
+      let clientPhone = clientData.telefono || clientData.phone || payload.booking?.clientPhone || 'N/D';
+      let clientEmail = (payload.clientEmail || clientData.email || payload.booking?.clientEmail || '').trim();
+
+      // Fallback: se clientEmail non è presente nel payload o nel booking, recuperala dall'archivio clienti
+      if (!clientEmail) {
+        const cId = String(payload.clientId || payload.booking?.clientId || clientData.id || clientData.clientId || '').trim();
+        const cPh = (typeof normalizePhone === 'function')
+          ? normalizePhone(clientPhone)
+          : String(clientPhone).replace(/\D/g, '');
+        try {
+          if (typeof directGetClientsList === 'function') {
+            const allClients = await directGetClientsList();
+            const found = allClients.find(c => {
+              const cp = (typeof normalizePhone === 'function')
+                ? normalizePhone(c.telefono || c.phone || '')
+                : String(c.telefono || c.phone || '').replace(/\D/g, '');
+              return (cId && String(c.id || c.clientId) === cId) || (cPh && cp && cp === cPh);
+            });
+            if (found) {
+              if (found.email) clientEmail = (found.email || '').trim();
+              if (clientNameFull === 'Cliente' && (found.nome || found.name)) {
+                clientNameFull = `${found.nome || found.name || ''} ${found.cognome || found.surname || ''}`.trim();
+                clientFirstName = (clientNameFull || '').split(' ')[0] || 'Cliente';
+                clientLastName = found.cognome || (clientNameFull.split(' ').slice(1).join(' ')) || '';
+              }
+              if (clientPhone === 'N/D' && (found.telefono || found.phone)) {
+                clientPhone = found.telefono || found.phone;
+              }
+            }
+          }
+        } catch (eCl) {
+          console.warn('[Email Frontend] Fallback recupero email cliente fallito:', eCl);
+        }
+      }
 
       const serviceName = (payload.serviceName || payload.booking?.service || 'Taglio').replace(/_/g, ' ');
       const rawStart = payload.startDate || payload.booking?.startISO || payload.booking?.start || new Date();
@@ -361,7 +393,10 @@ async function directSendEmailNotification(type, payload = {}) {
         reason: payload.reason || payload.booking?.cancellationReason || payload.booking?.reason || 'Nessun motivo specificato',
         dayName: payload.dayName || payload.booking?.dayName || '',
         timeStr: payload.timeStr || payload.booking?.timeStr || '',
-        firstDate: payload.firstDate || payload.booking?.firstDate || '',
+        firstDate: String(payload.firstDate || payload.booking?.firstDate || '')
+          .replace(/^Primo appuntamento:\s*/i, '')
+          .replace(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\b/g, (_, d, m, y) => y ? `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}` : `${d.padStart(2, '0')}/${m.padStart(2, '0')}`)
+          .trim(),
         oldFullDate: payload.oldStart ? formatEmailDateItalian(payload.oldStart, true) : (payload.oldBooking?.startISO ? formatEmailDateItalian(payload.oldBooking.startISO, true) : ''),
         newFullDate: payload.newStart ? formatEmailDateItalian(payload.newStart, true) : fullDate,
         BUSINESS_NAME: businessName,
@@ -376,8 +411,16 @@ async function directSendEmailNotification(type, payload = {}) {
       const footerHtml = getSalonContactFooter(settings);
       templateVars.emailFooter = footerHtml;
 
+      // Normalizzazione automatica a 2 cifre per qualsiasi data numerica con slash (es. 29/9/2026 -> 29/09/2026, 1/9/2026 -> 01/09/2026)
+      const formatSlashDates = (str) => {
+        if (!str || typeof str !== 'string') return str;
+        return str.replace(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\b/g, (_, d, m, y) => {
+          return y ? `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}` : `${d.padStart(2, '0')}/${m.padStart(2, '0')}`;
+        });
+      };
+
       // Interpola subject e body direttamente da EMAIL_TEMPLATES
-      const finalSubject = interpolateEmailTemplate(templateConfig.subject, templateVars);
+      const finalSubject = formatSlashDates(interpolateEmailTemplate(templateConfig.subject, templateVars));
       let rawBody = interpolateEmailTemplate(templateConfig.body, templateVars);
       if (!rawBody.includes('<p>') && !rawBody.includes('<br>') && !rawBody.includes('<div>')) {
         rawBody = rawBody.split('\n').join('<br>');
@@ -393,7 +436,7 @@ async function directSendEmailNotification(type, payload = {}) {
       );
       const autoFooter = templateHandlesFooter ? '' : footerHtml;
 
-      const finalHtml = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#222;line-height:1.6;">${rawBody}${autoFooter}</div>`;
+      const finalHtml = formatSlashDates(`<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#222;line-height:1.6;">${rawBody}${autoFooter}</div>`);
       const finalText = htmlToPlainText(finalHtml);
 
       console.log(`[Email Frontend] Invio '${type}' a ${recipient} | Oggetto: "${finalSubject}"`);
