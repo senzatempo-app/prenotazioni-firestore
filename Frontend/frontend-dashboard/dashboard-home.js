@@ -9,7 +9,6 @@ let cachedBarberAppointments = null; // Cache locale per tutti gli appuntamenti 
 let isCalendarExpanded = currentCalendarView === 'week'; 
 let dashboardCalendarScrollPosition = null; // Memorizza la posizione di scroll del calendario tra le viste
 let editAppState = {}; // Stato per la modifica appuntamento nel popup
-let calendarZoomLevel = parseFloat(localStorage.getItem('barber_calendar_zoom')) || 1.0; // Livello di zoom per l'altezza delle ore (1.0 = 60px)
 let dashboardAutoRefreshInterval = null; // Timer per il refresh automatico
 
 /**
@@ -199,37 +198,41 @@ function renderBarberDashboardPage(skipPush = false, isSilent = false) {
                 </button>
             </div>
             <div class="home-content">
-                <!-- Nome del Barbiere Visualizzato e Controlli di Cambio -->
-                <div class="${headerClass}">
-                    <h2 style="text-align: center; margin-top: 0; margin-bottom: 0;">${displayedBarberName}</h2>
-                </div>
-
                 <div class="${layoutClass}">
                     <!-- Colonna Sinistra: Calendario -->
                     <div class="calendar-section">
                         <div class="calendar-unified-container ${animClass}">
                             <div class="calendar-controls">
-                                <!-- Riga Superiore: Vista e Aggiorna -->
-                                <div class="calendar-controls-row top-row">
+                                <!-- Sezione Sinistra: Nome Barbiere e Vista -->
+                                <div class="calendar-controls-left">
+                                    <div class="calendar-barber-name">
+                                        <h2>${displayedBarberName}</h2>
+                                    </div>
                                     <div class="view-selector">
                                         <button class="${currentCalendarView === 'day' ? 'active' : ''}" onclick="setCalendarView('day')">Giorno</button>
                                         <button class="${currentCalendarView === 'week' ? 'active' : ''}" onclick="setCalendarView('week')">Settimana</button>
                                     </div>
-                                    <button class="calendar-refresh-btn" onclick="refreshDashboardData(false)" title="Sincronizza">
-                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
-                                    </button>
                                 </div>
-                                <!-- Riga Inferiore: Navigazione e Oggi -->
-                                <div class="calendar-controls-row bottom-row">
-                                    <div class="calendar-zoom-controls">
-                                        <button onclick="zoomCalendar(-1)" class="zoom-btn" title="Riduci">-</button>
-                                        <span id="zoom-level-label">100%</span>
-                                        <button onclick="zoomCalendar(1)" class="zoom-btn" title="Ingrandisci">+</button>
-                                    </div>
-                                    <div class="calendar-nav-group main-nav">
-                                        <div id="current-period-label-container"><span id="current-period-label"></span></div>
+
+                                <!-- Sezione Centrale: Dati della Settimana -->
+                                <div class="calendar-controls-center">
+                                    <span id="current-period-label"></span>
+                                </div>
+
+                                <!-- Sezione Destra: Frecce Cambio Periodo, Tasto Oggi e Aggiorna -->
+                                <div class="calendar-controls-right">
+                                    <div class="calendar-nav-arrows">
+                                        <button onclick="changeCalendarPeriod(-1)" class="nav-arrow" title="Precedente">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                                        </button>
+                                        <button onclick="changeCalendarPeriod(1)" class="nav-arrow" title="Successivo">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                        </button>
                                     </div>
                                     <button onclick="goToToday()" class="today-btn">OGGI</button>
+                                    <button class="calendar-refresh-btn" onclick="refreshDashboardData(false)" title="Sincronizza">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                                    </button>
                                 </div>
                             </div>
 
@@ -240,76 +243,45 @@ function renderBarberDashboardPage(skipPush = false, isSilent = false) {
                         </div>
                     </div>
 
-                    <!-- Colonna Destra: Info e Azioni -->
-                    <div class="info-section">
-                        <h2 style="text-align: left; margin-top: 0; margin-bottom: 20px;">Azioni Rapide</h2>
+                    <!-- Colonna Destra: Barra Azioni Rapide a Icone -->
+                    <div class="info-section quick-actions-sidebar ${animClass}">
+                        <button class="quick-action-btn" data-tooltip="Aggiungi Appuntamento" onclick="saveDashboardScroll(); renderBarberAddAppointmentPage();" aria-label="Aggiungi Appuntamento" title="Aggiungi Appuntamento">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        </button>
                         
-                        <div class="dashboard-cards-grid">
-                            <div class="dashboard-card ${animClass}" style="animation-delay: 0.1s;" onclick="saveDashboardScroll(); renderBarberAddAppointmentPage();">
-                                <div class="dashboard-card-icon">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                                </div>
-                                <div class="dashboard-card-label">Aggiungi Appuntamento</div>
-                            </div>
-                            
-                            <div class="dashboard-card ${animClass}" style="animation-delay: 0.15s;" onclick="saveDashboardScroll(); renderBarberWeeklyAppointmentsListPage();">
-                                <div class="dashboard-card-icon">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15.61V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"></path><path d="M16 2v4"></path><path d="M8 2v4"></path><path d="M3 10h18"></path><path d="M19 22l2-2-2-2"></path><path d="M21 20H15a2 2 0 0 1-2-2"></path></svg>
-                                </div>
-                                <div class="dashboard-card-label">Appuntamenti Settimanali</div>
-                            </div>
+                        <button class="quick-action-btn" data-tooltip="Appuntamenti Settimanali" onclick="saveDashboardScroll(); renderBarberWeeklyAppointmentsListPage();" aria-label="Appuntamenti Settimanali" title="Appuntamenti Settimanali">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15.61V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"></path><path d="M16 2v4"></path><path d="M8 2v4"></path><path d="M3 10h18"></path><path d="M19 22l2-2-2-2"></path><path d="M21 20H15a2 2 0 0 1-2-2"></path></svg>
+                        </button>
 
-                            <div class="dashboard-card ${animClass}" style="animation-delay: 0.4s;" onclick="saveDashboardScroll(); renderBarberAppointmentsListPage();">
-                                <div class="dashboard-card-icon">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                                </div>
-                                <div class="dashboard-card-label">Lista Appuntamenti</div>
-                            </div>                            
+                        <button class="quick-action-btn" data-tooltip="Lista Appuntamenti" onclick="saveDashboardScroll(); renderBarberAppointmentsListPage();" aria-label="Lista Appuntamenti" title="Lista Appuntamenti">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                        </button>                            
 
-                            <div class="dashboard-card ${animClass}" style="animation-delay: 0.3s;" onclick="saveDashboardScroll(); renderBarberClientsListPage();">
-                                <div class="dashboard-card-icon">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                                </div>
-                                <div class="dashboard-card-label">Lista Clienti</div>
-                            </div>
+                        <button class="quick-action-btn" data-tooltip="Lista Clienti" onclick="saveDashboardScroll(); renderBarberClientsListPage();" aria-label="Lista Clienti" title="Lista Clienti">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                        </button>
 
-                            <div class="dashboard-card ${animClass}" style="animation-delay: 0.2s; ${cancelCardStyle}" onclick="saveDashboardScroll(); renderBarberCancellationsPage();">
-                                <div class="dashboard-card-icon" style="background: ${pendingCount > 0 ? 'rgba(255,255,255,0.2)' : ''};">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${pendingCount > 0 ? 'white' : 'currentColor'}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
-                                </div>
-                                <div class="dashboard-card-label" style="color: ${pendingCount > 0 ? 'white' : 'inherit'}">Richieste Annullamenti</div>
-                                ${pendingCount > 0 ? `<div style="position: absolute; top: 10px; right: 10px; background: white; color: #dc3545; width: 20px; height: 20px; border-radius: 50%; font-size: 0.7em; display: flex; align-items: center; justify-content: center; font-weight: 800;">${pendingCount}</div>` : ''}
-                            </div>
+                        <button class="quick-action-btn ${pendingCount > 0 ? 'has-pending' : ''}" data-tooltip="Richieste Cancellazione" onclick="saveDashboardScroll(); renderBarberCancellationsPage();" aria-label="Richieste Cancellazione" title="Richieste Cancellazione">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${pendingCount > 0 ? '#dc3545' : 'currentColor'}" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+                            ${pendingCount > 0 ? `<span class="quick-action-badge">${pendingCount}</span>` : ''}
+                        </button>
 
-                            <div class="dashboard-card ${animClass}" style="animation-delay: 0.45s;" onclick="saveDashboardScroll(); renderBarberWorkingHoursPage();">
-                                <div class="dashboard-card-icon">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                                </div>
-                                <div class="dashboard-card-label">Orari e Servizi</div>
-                            </div>
+                        <button class="quick-action-btn" data-tooltip="Orari e Servizi" onclick="saveDashboardScroll(); renderBarberWorkingHoursPage();" aria-label="Orari e Servizi" title="Orari e Servizi">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                        </button>
 
-                            <div class="dashboard-card ${animClass}" style="animation-delay: 0.48s;" onclick="saveDashboardScroll(); renderPersonalCommitmentsListPage();">
-                                <div class="dashboard-card-icon">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-                                </div>
-                                <div class="dashboard-card-label">Indisponibilità Barbiere</div>
-                            </div>
+                        <button class="quick-action-btn" data-tooltip="Indisponibilità Barbiere" onclick="saveDashboardScroll(); renderPersonalCommitmentsListPage();" aria-label="Indisponibilità Barbiere" title="Indisponibilità Barbiere">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                        </button>
 
-                            <div class="dashboard-card ${animClass}" style="animation-delay: 0.5s;" onclick="saveDashboardScroll(); renderBarberSettingsPage();">
-                                <div class="dashboard-card-icon">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                                </div>
-                                <div class="dashboard-card-label">Impostazioni</div>
-                            </div>
-                        </div>
+                        <button class="quick-action-btn" data-tooltip="Impostazioni" onclick="saveDashboardScroll(); renderBarberSettingsPage();" aria-label="Impostazioni" title="Impostazioni">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                        </button>
                     </div>
                 </div>
             </div>
         </div>
     `;
-
-    // Aggiorna l'etichetta dello zoom con il valore corretto in memoria
-    document.getElementById('zoom-level-label').innerText = `${Math.round(calendarZoomLevel * 100)}%`;
 
     // Se abbiamo i dati in cache, renderizziamo subito il calendario, altrimenti mostriamo lo spinner
     if (cachedBarberAppointments) {
@@ -371,55 +343,21 @@ function renderBarberSettings() { showCustomAlert("Info", "Pagina Impostazioni i
 function setCalendarView(view) {
     if (currentCalendarView === view) return;
 
-    const infoSection = document.querySelector('.info-section');
+    currentCalendarView = view;
+    isCalendarExpanded = (view === 'week');
+    localStorage.setItem('barber_calendar_view', view);
+
     const layout = document.querySelector('.dashboard-layout');
-    const cards = infoSection ? infoSection.querySelectorAll('.dashboard-card') : [];
-
-
-    // 1. Fai scomparire le card azione
-    if (infoSection) {
-        infoSection.classList.add('switching-view');
-        // Rimuovi la classe fade-in da ogni card per resettare l'animazione
-        cards.forEach(card => {
-            card.classList.remove('fade-in');
-            card.style.opacity = '0'; // Assicurati che siano invisibili
-        });
+    if (layout) {
+        layout.classList.toggle('expanded', isCalendarExpanded);
     }
 
-    // 2. Attendi un istante e avvia l'espansione/contrazione
-    setTimeout(() => {
-        currentCalendarView = view;
-        isCalendarExpanded = (view === 'week');
-        localStorage.setItem('barber_calendar_view', view);
-        
-        if (layout) {
-            layout.classList.toggle('expanded', isCalendarExpanded);
-        }
+    document.querySelectorAll('.view-selector button').forEach(btn => {
+        const isSettimana = btn.textContent.toLowerCase().includes('settimana');
+        btn.classList.toggle('active', (view === 'week' && isSettimana) || (view === 'day' && !isSettimana));
+    });
 
-        // Aggiorniamo lo stato attivo dei pulsanti nel selettore
-        // Questi bottoni non vengono ricreati, quindi possiamo aggiornarli direttamente.
-
-        document.querySelectorAll('.view-selector button').forEach(btn => {
-            const isSettimana = btn.textContent.toLowerCase().includes('settimana');
-            btn.classList.toggle('active', (view === 'week' && isSettimana) || (view === 'day' && !isSettimana));
-        });
-
-        // Ridisegniamo il calendario mentre si espande
-        fetchAndRenderBarberAppointments();
-
-        // 3. Quando l'animazione del layout finisce (500ms), fai riapparire le card in sequenza
-        setTimeout(() => {
-            if (infoSection) {
-                infoSection.classList.remove('switching-view');
-                cards.forEach((card, index) => {
-                    // Forza un reflow per garantire che la rimozione della classe sia effettiva prima di riaggiungerla
-                    void card.offsetWidth; 
-                    card.style.animationDelay = `${index * 0.1}s`; // Staggered delay
-                    card.classList.add('fade-in'); // Aggiungi per riattivare l'animazione
-                });
-            }
-        }, 500);
-    }, 150);
+    fetchAndRenderBarberAppointments();
 }
 
 /**
@@ -446,27 +384,6 @@ function changeCalendarPeriod(offset) {
 }
 
 /**
- * Modifica il livello di zoom del calendario.
- * @param {number} direction - 1 per ingrandire, -1 per ridurre.
- */
-function zoomCalendar(direction) {
-    const ZOOM_STEP = 0.25;
-    const MIN_ZOOM = 0.5; // 30px
-    const MAX_ZOOM = 2.0; // 120px
-
-    let newZoom = calendarZoomLevel + (direction * ZOOM_STEP);
-    newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
-
-    if (newZoom !== calendarZoomLevel) {
-        calendarZoomLevel = newZoom;
-        localStorage.setItem('barber_calendar_zoom', calendarZoomLevel); // Salva il nuovo valore di zoom
-        // Aggiorna l'etichetta della percentuale
-        document.getElementById('zoom-level-label').innerText = `${Math.round(calendarZoomLevel * 100)}%`;
-        fetchAndRenderBarberAppointments(false, true); // Re-renderizza il calendario dalla cache
-    }
-}
-
-/**
  * Posiziona lo scroll del calendario in modo che l'ora corrente sia a 1/4 dell'altezza.
  */
 function scrollToCurrentTime(calendarBodyEl) {
@@ -474,8 +391,7 @@ function scrollToCurrentTime(calendarBodyEl) {
     
     requestAnimationFrame(() => {
         const now = new Date();
-        const baseHourHeight = currentCalendarView === 'week' ? 36 : 60;
-        const hourHeight = baseHourHeight * calendarZoomLevel;
+        const hourHeight = 100;
         const currentPixels = (now.getHours() * hourHeight) + (now.getMinutes() * (hourHeight / 60));
         const targetScroll = currentPixels - (calendarBodyEl.clientHeight / 4);
         calendarBodyEl.scrollTop = targetScroll > 0 ? targetScroll : 0;
@@ -594,8 +510,7 @@ function renderCustomCalendar(appointments, isSilent = false, savedScrollTop = n
     const calendarContainer = document.getElementById('custom-barber-calendar');
     if (!calendarContainer) return;
 
-    const baseHourHeight = currentCalendarView === 'week' ? 36 : 60;
-    const hourHeight = baseHourHeight * calendarZoomLevel;
+    const hourHeight = 100;
     calendarContainer.classList.toggle('calendar-view-week', currentCalendarView === 'week');
     calendarContainer.classList.toggle('daily-view-full-height', currentCalendarView === 'day');
 
@@ -678,7 +593,7 @@ function renderCustomCalendar(appointments, isSilent = false, savedScrollTop = n
             // Calcolo proporzionale: 1 ora = hourHeight pixel
             const top = (startHour * hourHeight) + (startMinute * (hourHeight / 60));
             const calculatedHeight = ((endHour * hourHeight) + (endMinute * (hourHeight / 60))) - top;
-            const height = Math.max(!isNaN(calculatedHeight) && calculatedHeight > 0 ? calculatedHeight : (durationMin * (hourHeight / 60)), 15);
+            const height = Math.max(!isNaN(calculatedHeight) && calculatedHeight > 0 ? calculatedHeight : (durationMin * (hourHeight / 60)), 24);
 
             const statusNormalized = String(app.status || '').trim().toLowerCase();
             const isPendingCancel = statusNormalized === 'richiesta cancellazione';

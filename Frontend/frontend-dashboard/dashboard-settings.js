@@ -6,7 +6,7 @@ let initialSettingsState = null; // Stato iniziale per il controllo modifiche
 /**
  * Helper per creare il blocco HTML di un barbiere con etichette descrittive
  */
-window.createBarberBlockHtml = function(id, b = {}) {
+window.createBarberBlockHtml = function (id, b = {}) {
     const isFirst = id === 'barber_1';
     const bNome = b.nome || b.name || '';
     const bCal = b.calendarId || '';
@@ -61,7 +61,7 @@ window.createBarberBlockHtml = function(id, b = {}) {
     `;
 }
 
-window.addNewBarberBlock = function() {
+window.addNewBarberBlock = function () {
     const list = document.getElementById('settings-barbers-list');
     const newId = "barber_" + Date.now();
     const html = createBarberBlockHtml(newId, { nome: "", calendarId: "", email: "", telefono: "", foto: "", password: "", isActive: true });
@@ -76,7 +76,7 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
     if (!skipPush) pushView('settings');
     const settings = (cachedAppData && cachedAppData.settings) || {};
     const allBarbers = (cachedAppData && (cachedAppData.allBarbers || cachedAppData.barbers)) || {};
-    
+
     // Identifichiamo il barbiere loggato con controlli sicuri
     const barberEntries = Object.entries(allBarbers);
     const loggedInEmail = (typeof userData !== 'undefined' && userData && userData.email) ? userData.email.toLowerCase().trim() : '';
@@ -125,10 +125,10 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                     <div class="booking-card ${animClass}" style="animation-delay: 0.1s;">
                         <div class="card-title">${isOwner ? 'Dati Barbieri' : 'Il mio Profilo'}</div>
                         <div id="settings-barbers-list" style="display: flex; flex-direction: column; gap: 20px; width: 100%; margin-bottom: 15px;">
-                            ${isOwner 
-                                ? Object.entries(allBarbers).map(([id, b]) => createBarberBlockHtml(id, b || {})).join('')
-                                : createBarberBlockHtml(currentBarberId, allBarbers[currentBarberId] || {})
-                            }
+                            ${isOwner
+            ? Object.entries(allBarbers).map(([id, b]) => createBarberBlockHtml(id, b || {})).join('')
+            : createBarberBlockHtml(currentBarberId, allBarbers[currentBarberId] || {})
+        }
                         </div>
                         ${isOwner ? `<button onclick="addNewBarberBlock()" style="width: 100%; padding: 12px; border: 2px dashed #ccc; color: #888; background: #fdfdfd; border-radius: 15px; font-size: 0.8em; font-weight: 700;">+ AGGIUNGI BARBIERE</button>` : ''}
                     </div>
@@ -177,7 +177,7 @@ function renderBarberSettingsPage(skipPush = false, isSilent = false) {
                             </div>
 
                             <div style="text-align: left; width: 100%;">
-                                <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Settimane di anticipo ricarica appuntamenti settimanali</label>
+                                <label style="font-size: 0.75em; font-weight: 700; color: #666; margin-bottom: 2px; display: block; text-transform: uppercase;">Settimane di ricarica appuntamenti settimanali</label>
                                 <input type="number" id="set-WEEKLY_REFILL_WEEKS" min="1" value="${settings.WEEKLY_REFILL_WEEKS ?? settings.weeklyRefillWeeks ?? 1}" onfocus="handleInputFocus(this)" onblur="handleInputBlur(this)"> 
                             </div>
                         </div>
@@ -229,7 +229,7 @@ function getCurrentSettingsState() {
     const currentSettingsData = {};
     const settingsKeys = [
         'BUSINESS_NAME', 'BUSINESS_ADDRESS', 'CONTACT_PHONE', 'CONTACT_EMAIL',
-        'MIN_CANCELLATION_HOURS', 'AUTO_CANCELLATION_MINUTES', 'BOOKING_WINDOW_DAYS', 
+        'MIN_CANCELLATION_HOURS', 'AUTO_CANCELLATION_MINUTES', 'BOOKING_WINDOW_DAYS',
         'BOOKING_HISTORY', 'REMINDER_NOTIFICATION_TIME', 'MIN_BOOKINGS_DAYS',
         'MAX_FUTURE_BOOKINGS', 'WEEKLY_REFILL_WEEKS'
     ];
@@ -264,7 +264,7 @@ function getCurrentSettingsState() {
  */
 function saveAllSettings(btn = null) {
     const currentState = getCurrentSettingsState();
-    
+
     // Se il salvataggio è automatico (btn è null) e non ci sono modifiche, usciamo senza chiamare il server
     if (btn === null && (initialSettingsState === currentState || initialSettingsState === null)) {
         return;
@@ -275,11 +275,11 @@ function saveAllSettings(btn = null) {
     // 1. Raccogliamo Settings
     const settingsKeys = [
         'BUSINESS_NAME', 'BUSINESS_ADDRESS', 'CONTACT_PHONE', 'CONTACT_EMAIL',
-        'MIN_CANCELLATION_HOURS', 'AUTO_CANCELLATION_MINUTES', 'BOOKING_WINDOW_DAYS', 
+        'MIN_CANCELLATION_HOURS', 'AUTO_CANCELLATION_MINUTES', 'BOOKING_WINDOW_DAYS',
         'BOOKING_HISTORY', 'REMINDER_NOTIFICATION_TIME', 'MIN_BOOKINGS_DAYS',
         'MAX_FUTURE_BOOKINGS', 'WEEKLY_REFILL_WEEKS'
     ];
-    
+
     const settingsData = {};
     settingsKeys.forEach(key => {
         const el = document.getElementById('set-' + key);
@@ -296,7 +296,7 @@ function saveAllSettings(btn = null) {
     // 2. Raccogliamo Barbieri
     const barbersArray = [];
     const barberBlocks = document.querySelectorAll('.settings-barber-block');
-    
+
     barberBlocks.forEach(block => {
         const id = block.dataset.id;
         const bData = { id: id };
@@ -304,10 +304,10 @@ function saveAllSettings(btn = null) {
         inputs.forEach(inp => {
             bData[inp.dataset.f] = inp.value.trim();
         });
-        
+
         const check = block.querySelector(`.barber-inp-check[data-id="${id}"]`);
         bData.isActive = check ? check.checked : false;
-        
+
         barbersArray.push(bData);
     });
 
