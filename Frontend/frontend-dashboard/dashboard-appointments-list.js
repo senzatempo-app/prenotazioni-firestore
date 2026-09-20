@@ -143,7 +143,7 @@ function renderAppointmentsCards(appointments) {
  * Mostra il popup di conferma per cancellare un appuntamento standard.
  */
 function confirmCancelStandardAppointment(bookingId, clientName, dateTime, sourceView = 'appointments-list') {
-    const existingPopup = document.querySelector('.popup-overlay .appointment-detail-popup') || document.querySelector('.popup-overlay .booking-card');
+    const existingPopup = document.querySelector('#appointment-details-overlay .appointment-detail-popup, #appointment-details-overlay .appointment-popover-card') || document.querySelector('.popup-overlay .appointment-detail-popup') || document.querySelector('.popup-overlay .booking-card');
 
     const confirmationHtml = `
         <h2 style="margin-bottom: 10px; font-size: 1.2em; width: 100%;">Cancella Appuntamento</h2>
@@ -155,18 +155,20 @@ function confirmCancelStandardAppointment(bookingId, clientName, dateTime, sourc
     `;
 
     if (existingPopup && existingPopup.closest('#appointment-details-overlay')) {
-        // Se siamo nel popup dei dettagli, navighiamo al suo interno
+        const detailsOverlay = existingPopup.closest('#appointment-details-overlay');
         const originalContent = existingPopup.innerHTML;
         existingPopup.innerHTML = confirmationHtml;
 
         document.getElementById('cancel-back-btn').onclick = () => {
             existingPopup.innerHTML = originalContent;
-            // Dobbiamo ri-associare gli eventi persi con la sostituzione dell'HTML
+            // Se esiste un appuntamento valido, ripristina i listener chiudendo e riaprendo con il riferimento corretto alla card
             const appointment = (cachedBarberAppointments || []).find(a => (a.id === bookingId || a.bookingId === bookingId));
+            if (detailsOverlay) detailsOverlay.remove();
+            document.querySelectorAll('.appointment-card.popover-active').forEach(el => el.classList.remove('popover-active'));
             if (appointment) {
                 const cReason = appointment.cancelReason || appointment.cancellationReason || '';
-                showAppointmentDetailsPopup(appointment.id || appointment.bookingId, appointment.clientName, appointment.service, appointment.start, appointment.end, appointment.clientPhone, currentDisplayedBarberId, appointment.status, cReason);
-                existingPopup.closest('.popup-overlay').remove(); // Rimuovi il vecchio e lascia che show... ne crei uno nuovo e pulito
+                const cardEl = document.querySelector(`.appointment-card[data-app-id="${appointment.id || appointment.bookingId}"]`);
+                showAppointmentDetailsPopup(appointment.id || appointment.bookingId, appointment.clientName, appointment.service, appointment.start, appointment.end, appointment.clientPhone, currentDisplayedBarberId, appointment.status, cReason, cardEl);
             }
         };
 

@@ -495,8 +495,8 @@ async function directProcessBooking(arg1, arg2, arg3, arg4, arg5, arg6) {
     const bPhone = String(b.clientPhone || '').replace(/\D/g, '');
     const bId = String(b.clientId || '').toLowerCase().trim();
     const isThisClient = (bEmail && cEmail && bEmail === cEmail) ||
-                         (bPhone && cPhone && bPhone === cPhone) ||
-                         (bId && cId && bId === cId);
+      (bPhone && cPhone && bPhone === cPhone) ||
+      (bId && cId && bId === cId);
     if (!isThisClient) return false;
     const bIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
     if (!bIso) return false;
@@ -623,7 +623,7 @@ async function directCancelAppointment(bookingId, cancellationReason = '') {
           const found = allClients.find(c => {
             const cp = (typeof normalizePhone === 'function') ? normalizePhone(c.telefono || c.phone || '') : String(c.telefono || c.phone || '').replace(/\D/g, '');
             return (bookingData.clientId && String(c.id || c.clientId) === String(bookingData.clientId)) ||
-                   (p && cp === p);
+              (p && cp === p);
           });
           if (found && found.email) {
             bookingData.clientEmail = found.email;
@@ -760,7 +760,7 @@ async function directHandleCancellationDecision(bookingId, decision) {
     const docRef = store.collection('bookings').doc(String(bookingId));
     const docSnap = await docRef.get();
     if (docSnap.exists) bookingData = docSnap.data();
-  } catch (e) {}
+  } catch (e) { }
 
   if (decision === 'approve') {
     await store.collection('bookings').doc(String(bookingId)).delete();
@@ -783,13 +783,13 @@ async function directHandleCancellationDecision(bookingId, decision) {
             const found = allClients.find(c => {
               const cp = (typeof normalizePhone === 'function') ? normalizePhone(c.telefono || c.phone || '') : String(c.telefono || c.phone || '').replace(/\D/g, '');
               return (bookingData.clientId && String(c.id || c.clientId) === String(bookingData.clientId)) ||
-                     (p && cp === p);
+                (p && cp === p);
             });
             if (found && found.email) {
               bookingData.clientEmail = found.email;
             }
           }
-        } catch (e) {}
+        } catch (e) { }
       }
       if (typeof directSendEmailNotification === 'function') {
         const appPayload = {
@@ -822,7 +822,7 @@ async function directHandleCancellationDecision(bookingId, decision) {
               bookingData.clientEmail = cd.email || cd.clientEmail || '';
             }
           }
-        } catch (e) {}
+        } catch (e) { }
       }
       if (typeof directSendEmailNotification === 'function') {
         const rejPayload = {
@@ -855,7 +855,7 @@ async function directUpdateAppointment(bookingId, newStartIso, newEndIso, servic
   try {
     const docSnap = await store.collection('bookings').doc(bookingId).get();
     if (docSnap.exists) oldBookingData = docSnap.data();
-  } catch (e) {}
+  } catch (e) { }
 
   const startD = new Date(newStartIso);
   const endD = new Date(newEndIso);
@@ -889,6 +889,22 @@ async function directUpdateAppointment(bookingId, newStartIso, newEndIso, servic
   }
 
   if (oldBookingData && typeof directSendEmailNotification === 'function') {
+    const oldStartIso = formatTimestampToIso(oldBookingData.startISO || oldBookingData.start);
+    const oldStartMs = oldStartIso ? new Date(oldStartIso).getTime() : null;
+    const newStartMs = startD.getTime();
+    const startChanged = (oldStartMs !== null) && (oldStartMs !== newStartMs);
+
+    const oldBarberId = String(oldBookingData.barberId || '').trim();
+    const newBarberId = String(barberId || oldBarberId).trim();
+    const barberChanged = Boolean(barberId && oldBarberId && oldBarberId !== newBarberId);
+
+    const oldService = String(oldBookingData.service || '').trim().toLowerCase();
+    const newService = String(serviceName || oldService).trim().toLowerCase();
+    const serviceChanged = Boolean(serviceName && oldService && oldService !== newService);
+
+    // Verifichiamo se è cambiato l'orario di inizio, il barbiere o il servizio
+    const isScheduleOrServiceChanged = startChanged || barberChanged || serviceChanged;
+
     const modPayload = {
       oldBooking: oldBookingData,
       booking: { ...oldBookingData, ...updateData, startISO: startD },
@@ -898,7 +914,11 @@ async function directUpdateAppointment(bookingId, newStartIso, newEndIso, servic
       serviceName: serviceName || oldBookingData.service,
       barberId: barberId || oldBookingData.barberId
     };
-    directSendEmailNotification('bookingModification', modPayload);
+
+    // Invia la notifica al cliente SOLO se è cambiato l'orario, la data, il barbiere o il servizio (non se è cambiata solo la durata)
+    if (isScheduleOrServiceChanged) {
+      directSendEmailNotification('bookingModification', modPayload);
+    }
     directSendEmailNotification('barberModificationNotification', modPayload);
   }
 
@@ -1034,7 +1054,7 @@ async function directGetWeeklyConflictsPreview(barberId, dayName, timeStr, durat
   const activeBookings = bookings.filter(b => {
     const st = (b.status || '').toLowerCase().trim();
     return (st === 'confermato' || st === 'richiesta cancellazione' || st === 'weekly' || st === 'indisponibile') &&
-           String(b.barberId || '').trim() === String(barberId || '').trim();
+      String(b.barberId || '').trim() === String(barberId || '').trim();
   }).map(b => {
     const sIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
     const sMs = new Date(sIso).getTime();
@@ -1165,7 +1185,7 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
   const activeBookings = bookings.filter(b => {
     const st = (b.status || '').toLowerCase().trim();
     return (st === 'confermato' || st === 'richiesta cancellazione' || st === 'weekly' || st === 'indisponibile') &&
-           String(b.barberId || '').trim() === String(barberId || '').trim();
+      String(b.barberId || '').trim() === String(barberId || '').trim();
   }).map(b => {
     const sIso = formatTimestampToIso(b.startISO || b.startIso || b.start);
     const sMs = new Date(sIso).getTime();
@@ -1238,7 +1258,7 @@ async function directSaveWeeklyAppointment(clientIdentifier, dayName, timeStr, b
   await batch.commit();
   console.log(`[Firebase Direct] Appuntamento settimanale ${weeklyBookingId} salvato con successo.`);
 
-  const firstDateFormatted = firstOccDate 
+  const firstDateFormatted = firstOccDate
     ? `${dayName} ${String(firstOccDate.getDate()).padStart(2, '0')}/${String(firstOccDate.getMonth() + 1).padStart(2, '0')}/${firstOccDate.getFullYear()} ore ${timeStr}`
     : `Ogni ${dayName} alle ore ${timeStr}`;
 
@@ -1315,7 +1335,7 @@ async function directRemoveWeeklyAppointment(bookingId) {
           cEmail = cDoc.data().email || '';
           cName = cName || `${cDoc.data().nome || ''} ${cDoc.data().cognome || ''}`.trim();
         }
-      } catch (e) {}
+      } catch (e) { }
     }
     const cancelPayload = {
       clientEmail: cEmail,

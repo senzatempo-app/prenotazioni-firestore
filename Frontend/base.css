@@ -44,6 +44,23 @@ p {
   justify-content: center;
   align-items: center;
   z-index: 11000;
+  padding: 0 54px;
+  box-sizing: border-box;
+}
+
+.fixed-header h2 {
+  color: #8A9A5B;
+  text-align: center;
+  margin: 0;
+  font-size: clamp(0.92rem, 3.8vw, 1.35rem);
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  line-height: 1.2;
 }
 
 .header-logo {

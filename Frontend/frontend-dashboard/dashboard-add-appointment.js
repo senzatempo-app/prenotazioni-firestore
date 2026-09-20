@@ -36,7 +36,7 @@ function renderBarberAddAppointmentPage(skipPush = false) {
                 <div class="booking-container">
                     
                     <!-- 1. SELEZIONE CLIENTE -->
-                    <div class="booking-card fade-in">
+                    <div id="add-step-client" class="booking-card fade-in">
                         <div class="card-title" id="add-client-card-title">1. Seleziona Cliente</div>
                         <div id="client-selection-area" style="width: 100%;">
                             <div id="search-container" style="display: flex; gap: 10px; width: 100%; align-items: center;">
@@ -106,9 +106,14 @@ function renderBarberAddAppointmentPage(skipPush = false) {
         const safeName = rawName.replace(/'/g, "\\'");
         const duration = parseInt(s.duration || s.durationMin || 30, 10) || 30;
         const img = s.imageUrl || (typeof resolveLocalPhotoUrl === 'function' ? resolveLocalPhotoUrl(s.photoName, rawName, false) : `./Frontend/Photo/${rawName}.jpg`);
-        return `<div class="service-card" onclick="selectServiceForAdd(this, '${safeName}', ${duration})" style="background-image: url('${img}')">
-                    <div class="service-name">${formattedName}</div>
-                </div>`;
+        return `
+            <div class="service-card compact-service-chip" onclick="selectServiceForAdd(this, '${safeName}', ${duration})">
+                <img src="${img}" class="service-chip-thumb" alt="${formattedName}" onerror="this.style.display='none';">
+                <div class="service-chip-info">
+                    <div class="service-chip-name">${formattedName}</div>
+                    <div class="service-chip-duration">${duration} min</div>
+                </div>
+            </div>`;
     }).join('');
 
     // Genera giorni (clonando logica di prenotation.js)

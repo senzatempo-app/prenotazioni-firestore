@@ -109,12 +109,13 @@ function renderBarberWeeklyAppointmentPage(skipPush = false) {
             </div>
             <div class="home-content">
                 <div class="booking-container">
-                    <div class="booking-card fade-in">
+                    <!-- 1. SELEZIONE CLIENTE -->
+                    <div id="weekly-step-client" class="booking-card fade-in">
                         <div class="card-title" id="weekly-client-card-title">1. Seleziona Cliente</div>
                         <div id="weekly-client-area" style="width: 100%;">
                             <div id="weekly-search-container" style="display: flex; gap: 10px; width: 100%; align-items: center;">
                                 <input type="text" id="weeklyClientSearch" placeholder="Cerca cliente (nome o tel...)" oninput="filterWeeklyClients(this.value)" style="flex-grow: 1; margin: 0; height: 45px;">
-                                <button id="weekly-btn-new-client-plus" onclick="showWeeklyNewClientForm()" style="width: 45px; height: 45px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #ccc; border-radius: 50%; color: #8A9A5B; background: white;" title="1. Nuovo Cliente">
+                                <button id="weekly-btn-new-client-plus" onclick="showWeeklyNewClientForm()" style="width: 45px; height: 45px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #ccc; border-radius: 50%; color: #8A9A5B; background: white;" title="Nuovo Cliente">
                                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                                 </button>
                             </div>
@@ -162,13 +163,19 @@ function renderBarberWeeklyAppointmentPage(skipPush = false) {
     `;
 
     const svcContainer = document.getElementById('weekly-services-grid');
-    svcContainer.innerHTML = cachedAppData.services.map(s => {
-        const duration = s.duration || s.durationMin || 30;
-        const photo = s.imageUrl || (s.photoName ? ('./Frontend/Photo/' + s.photoName + '.jpg') : '');
-        const safeName = String(s.name || '').replace(/'/g, "\\'");
+    svcContainer.innerHTML = (cachedAppData.services || []).map(s => {
+        const rawName = s.name || s.nome || 'Servizio';
+        const formattedName = rawName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        const safeName = rawName.replace(/'/g, "\\'");
+        const duration = parseInt(s.duration || s.durationMin || 30, 10) || 30;
+        const img = s.imageUrl || (typeof resolveLocalPhotoUrl === 'function' ? resolveLocalPhotoUrl(s.photoName, rawName, false) : (s.photoName ? ('./Frontend/Photo/' + s.photoName + '.jpg') : `./Frontend/Photo/${rawName}.jpg`));
         return `
-            <div class="service-card" onclick="selectWeeklyService(this, '${safeName}', ${duration})" style="background-image: url('${photo}')">
-                <div class="service-name">${(s.name || '').replace(/_/g, ' ')}</div>
+            <div class="service-card compact-service-chip" onclick="selectWeeklyService(this, '${safeName}', ${duration})">
+                <img src="${img}" class="service-chip-thumb" alt="${formattedName}" onerror="this.style.display='none';">
+                <div class="service-chip-info">
+                    <div class="service-chip-name">${formattedName}</div>
+                    <div class="service-chip-duration">${duration} min</div>
+                </div>
             </div>`;
     }).join('');
 
@@ -222,9 +229,26 @@ function selectWeeklyClient(email, nome, cognome, telefono) {
 }
 
 function showWeeklyNewClientForm() {
+    weeklyAppState.client = null;
+    weeklyAppState.service = null;
+    weeklyAppState.day = null;
+    weeklyAppState.slot = null;
+
+    const stepSvc = document.getElementById('weekly-step-service');
+    if (stepSvc) stepSvc.classList.add('hidden');
+    const stepDay = document.getElementById('weekly-step-day');
+    if (stepDay) stepDay.classList.add('hidden');
+    const stepSlots = document.getElementById('weekly-step-slots');
+    if (stepSlots) stepSlots.classList.add('hidden');
+    const confirmBtn = document.getElementById('weekly-confirm-btn');
+    if (confirmBtn) confirmBtn.classList.add('hidden');
+
+    document.querySelectorAll('#weekly-services-grid .service-card').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('#weekly-days-row .day-pill').forEach(p => p.classList.remove('active'));
+
     document.getElementById('weekly-new-client-fields').classList.remove('hidden');
     document.getElementById('weekly-search-container').classList.add('hidden');
-    document.getElementById('weekly-client-card-title').innerText = "Nuovo Cliente";
+    document.getElementById('weekly-client-card-title').innerText = "1. Nuovo Cliente";
 }
 
 function confirmWeeklyNewClientData(btn) {
@@ -277,8 +301,16 @@ function selectWeeklyService(el, name, duration) {
     // Centra la card orizzontalmente nello scroll dello schermo
     el.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
 
+    weeklyAppState.slot = null;
+    const confirmBtn = document.getElementById('weekly-confirm-btn');
+    if (confirmBtn) confirmBtn.classList.add('hidden');
+
     weeklyAppState.service = { name, duration };
     document.getElementById('weekly-step-day').classList.remove('hidden');
+
+    if (weeklyAppState.day) {
+        refreshWeeklySlots();
+    }
 }
 
 function generateWeeklyDayPills() {
@@ -294,6 +326,9 @@ function selectWeeklyDay(el, day) {
     document.querySelectorAll('#weekly-days-row .day-pill').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
     weeklyAppState.day = day;
+    weeklyAppState.slot = null;
+    const confirmBtn = document.getElementById('weekly-confirm-btn');
+    if (confirmBtn) confirmBtn.classList.add('hidden');
     refreshWeeklySlots();
 }
 
@@ -306,11 +341,11 @@ function refreshWeeklySlots() {
     
     // Rinominiamo per evitare SyntaxError: Identifier 'baseDuration' has already been declared
     const weeklyBaseDuration = sStandard ? sStandard.duration : 30;
-    const slotStep = (weeklyBaseDuration % 10 === 0) ? 10 : 15;
+    const slotStep = 5; // Scelta orari ogni 5 minuti
 
-    // Generiamo tutti gli orari dalle 08:00 alle 20:00 in base allo step calcolato
-    const startTime = 8 * 60; // 08:00
-    const endTime = 20 * 60;  // 20:00
+    // Generiamo tutti gli orari dalle 07:00 alle 21:00 ogni 5 minuti
+    const startTime = 7 * 60; // 07:00
+    const endTime = 21 * 60;  // 21:00
     const slots = [];
     for (let t = startTime; t <= endTime; t += slotStep) {
         const h = Math.floor(t / 60);
